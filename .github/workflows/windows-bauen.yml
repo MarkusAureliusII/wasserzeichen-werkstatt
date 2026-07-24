@@ -28,10 +28,15 @@ jobs:
         id: version
         shell: pwsh
         run: |
+          # Erlaubt sind 1.2.3 und Vorabversionen wie 1.2.3-beta.1 oder 1.2.3-rc.2.
           $v = (Get-Content version.txt -Raw).Trim()
-          if ($v -notmatch '^\d+\.\d+\.\d+$') { throw "version.txt enthält keine gültige Version: '$v'" }
-          "version=$v" >> $env:GITHUB_OUTPUT
-          Write-Host "Version: $v"
+          if ($v -notmatch '^\d+\.\d+\.\d+(-[0-9A-Za-z.]+)?$') {
+            throw "version.txt enthält keine gültige Version: '$v'"
+          }
+          $vorab = $v.Contains("-")
+          "version=$v"   >> $env:GITHUB_OUTPUT
+          "vorab=$vorab" >> $env:GITHUB_OUTPUT
+          Write-Host "Version: $v (Vorabversion: $vorab)"
 
       - name: Tag gegen version.txt prüfen
         if: startsWith(github.ref, 'refs/tags/v')
@@ -140,11 +145,16 @@ jobs:
           name: Wasserzeichen ${{ steps.version.outputs.version }}
           files: ausgabe/*
           generate_release_notes: true
+          prerelease: ${{ steps.version.outputs.vorab == 'True' }}
           body: |
-            **Neu installieren:** `Wasserzeichen-${{ steps.version.outputs.version }}-Setup.exe` herunterladen und ausführen.
+            **Installieren:** `Wasserzeichen-${{ steps.version.outputs.version }}-Setup.exe` herunterladen und ausführen.
 
             Beim ersten Start meldet Windows sich einmal mit „Der Computer wurde geschützt" —
             auf *Weitere Informationen* und dann *Trotzdem ausführen* klicken. Das kommt nur einmal.
 
             `app-${{ steps.version.outputs.version }}.zip` ist das kleine Update-Paket, das
             das Programm sich später selbst holt. Es muss nicht von Hand geladen werden.
+
+            ---
+            Diese Fassung ist auf einem Windows-x64-Rechner gebaut und läuft damit auch
+            auf Windows-on-ARM.

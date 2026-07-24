@@ -18,11 +18,20 @@
 #define Version Trim(FileRead(VersionDatei))
 #expr FileClose(VersionDatei)
 
+; Windows-Dateiversionen müssen rein numerisch sein. Bei einer Vorabversion wie
+; "1.0.0-beta.1" wird der Zusatz dafür abgeschnitten; angezeigt wird weiter die
+; vollständige Bezeichnung.
+#define VersionNum Version
+#if Pos("-", Version) > 0
+  #define VersionNum Copy(Version, 1, Pos("-", Version) - 1)
+#endif
+
 [Setup]
 AppId={{8F3C1A62-4D77-4C0E-9E21-5B7A2F9D4E10}
 AppName={#Name}
 AppVersion={#Version}
 AppVerName={#Name} {#Version}
+VersionInfoVersion={#VersionNum}
 DefaultDirName={localappdata}\Programs\Wasserzeichen
 DefaultGroupName={#Name}
 DisableProgramGroupPage=yes
