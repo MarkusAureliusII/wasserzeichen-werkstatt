@@ -83,7 +83,7 @@ jobs:
           $ziel = "dist\Wasserzeichen"
           if (-not (Test-Path "$ziel\Wasserzeichen.exe")) { throw "Wasserzeichen.exe wurde nicht erzeugt." }
           New-Item -ItemType Directory -Force -Path "$ziel\app" | Out-Null
-          Copy-Item oberflaeche.py, wasserzeichen.py, gestaltung.py, version.txt "$ziel\app\" -Force
+          Copy-Item oberflaeche.py, wasserzeichen.py, gestaltung.py, aktualisierung.py, version.txt "$ziel\app\" -Force
           Copy-Item windows\werkzeuge\ffmpeg.exe, windows\werkzeuge\ffprobe.exe $ziel -Force
           Copy-Item windows\ANLEITUNG.txt $ziel -Force
           $lizenz = @(
@@ -113,6 +113,10 @@ jobs:
         shell: pwsh
         run: |
           # Genau das lädt das Tool später bei einem kleinen Update: nur der Code.
+          # Der Prüfschritt hat beim Importieren __pycache__ angelegt — das gehört
+          # nicht ins Paket, sonst wandern fremde .pyc-Dateien mit.
+          Get-ChildItem dist\Wasserzeichen\app -Recurse -Directory -Filter __pycache__ |
+            Remove-Item -Recurse -Force
           New-Item -ItemType Directory -Force -Path ausgabe | Out-Null
           Compress-Archive -Path dist\Wasserzeichen\app\* -DestinationPath "ausgabe\app-${{ steps.version.outputs.version }}.zip" -Force
           $zip = Get-Item "ausgabe\app-${{ steps.version.outputs.version }}.zip"

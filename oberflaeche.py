@@ -16,6 +16,9 @@ from tkinter import filedialog, messagebox
 
 from PIL import Image, ImageDraw, ImageOps, ImageTk
 
+import webbrowser
+
+import aktualisierung as akt
 import wasserzeichen as w
 from gestaltung import (FARBE, EckenWahl, Fortschritt, Karte, Knopf, Schieber, Titel,
                         gesperrt, mono)
@@ -52,6 +55,8 @@ class Fenster(tk.Tk):
         self.minsize(1080, 860)
         self.einst = w.einstellungen_laden()
         self.meldungen = queue.Queue()
+        self.update_meldungen = queue.Queue()
+        self._update_laeuft = False
         self.laeuft = False
         self.abbruch_gewuenscht = False
         self.gesamt = 0
@@ -68,6 +73,31 @@ class Fenster(tk.Tk):
         self._zaehle_input()
         self.after(120, self._meldungen_abholen)
         self.protocol("WM_DELETE_WINDOW", self._schliessen)
+        self._symbol_setzen()
+
+        if akt.bereitgelegt(w.PROG_DIR):
+            # Beim letzten Mal geladen, aber noch nicht neu gestartet.
+            self._streifen_zeigen("Eine neue Fassung liegt bereit.",
+                                  "Neu starten", self._update_neu_starten)
+        else:
+            # Etwas verzögert, damit das Fenster zuerst steht.
+            self.after(1500, self._update_pruefen)
+
+    def _symbol_setzen(self):
+        """Fenstersymbol aus app/symbol.png, falls eines mitgeliefert wurde.
+
+        Liegt bewusst neben dem Programmcode und nicht in der exe: So lässt es
+        sich mit einem kleinen Update austauschen. Das Symbol der exe selbst und
+        der Verknüpfungen steckt dagegen fest in der Datei.
+        """
+        pfad = os.path.join(os.path.dirname(os.path.abspath(__file__)), "symbol.png")
+        if not os.path.isfile(pfad):
+            return
+        try:
+            self._symbol = ImageTk.PhotoImage(Image.open(pfad))
+            self.iconphoto(True, self._symbol)
+        except Exception:
+            pass  # ein fehlendes Symbol ist kein Grund, nicht zu starten
 
     # ------------------------------------------------------------------ Aufbau
 
@@ -96,6 +126,35 @@ class Fenster(tk.Tk):
         if self.beschr["marke"]:
             tk.Label(kopf, text=self.beschr["marke"], font=mono(9),
                      fg=FARBE["text_still"], bg=FARBE["grund"]).grid(row=0, column=2, sticky="e")
+
+        # Zweite Zeile im Kopf: bleibt leer, bis es etwas zu melden gibt.
+        self.streifen = tk.Frame(kopf, bg=FARBE["karte"],
+                                 highlightbackground=FARBE["linie"], highlightthickness=1)
+        self.streifen.columnconfigure(0, weight=1)
+        self.streifen_text = tk.Label(self.streifen, text="", font=mono(10),
+                                      fg=FARBE["text"], bg=FARBE["karte"], anchor="w")
+        self.streifen_text.grid(row=0, column=0, sticky="w", padx=16, pady=10)
+        self.streifen_knopf = None
+        self._streifen_sichtbar = False
+
+    def _streifen_zeigen(self, text, knopftext=None, befehl=None):
+        """Meldung über dem Fenster einblenden. Ohne Knopf nur als Hinweis."""
+        self.streifen_text.configure(text=text)
+        if self.streifen_knopf is not None:
+            self.streifen_knopf.destroy()
+            self.streifen_knopf = None
+        if knopftext and befehl:
+            self.streifen_knopf = Knopf(self.streifen, knopftext, befehl,
+                                        stil="primaer", breite=190, hoehe=30)
+            self.streifen_knopf.grid(row=0, column=1, sticky="e", padx=(10, 12), pady=8)
+        if not self._streifen_sichtbar:
+            self.streifen.grid(row=1, column=0, columnspan=3, sticky="ew", pady=(16, 0))
+            self._streifen_sichtbar = True
+
+    def _streifen_verbergen(self):
+        if self._streifen_sichtbar:
+            self.streifen.grid_remove()
+            self._streifen_sichtbar = False
 
     def _mitte(self):
         mitte = tk.Frame(self, bg=FARBE["grund"])
@@ -200,6 +259,17 @@ class Fenster(tk.Tk):
         self.protokoll.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(18, 0))
         self.protokoll.tag_configure("hell", foreground=FARBE["text"])
         self.protokoll.tag_configure("fehler", foreground=FARBE["warnung"])
+
+        # Fußzeile: Version und die Möglichkeit, selbst nachzusehen — falls beim
+        # Start kein Netz da war.
+        fusszeile = tk.Frame(innen, bg=FARBE["karte"])
+        fusszeile.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(12, 0))
+        fusszeile.columnconfigure(0, weight=1)
+        tk.Label(fusszeile, text=f"Version {w.VERSION}", font=mono(9),
+                 fg=FARBE["text_still"], bg=FARBE["karte"], anchor="w").grid(
+            row=0, column=0, sticky="w")
+        Knopf(fusszeile, "Nach Updates suchen", lambda: self._update_pruefen(von_hand=True),
+              breite=190, hoehe=28).grid(row=0, column=1, sticky="e")
 
     # ------------------------------------------------------------ Einstellungen
 
@@ -357,8 +427,108 @@ class Fenster(tk.Tk):
         except Exception as e:
             self.meldungen.put(("ENDE", 0, [("", w._klartext(e))], None))
 
+    # -------------------------------------------------------------- Aktualisieren
+
+    def _update_pruefen(self, von_hand=False):
+        """Im Hintergrund nachsehen, ob es etwas Neueres gibt.
+
+        Läuft in einem eigenen Thread, damit ein lahmes Netz das Fenster nicht
+        blockiert. Das Ergebnis geht über die Warteschlange zurück, weil Tk nur
+        aus dem Hauptthread bedient werden darf.
+        """
+        if self._update_laeuft:
+            return
+        self._update_laeuft = True
+        if von_hand:
+            self._streifen_zeigen("Suche nach Aktualisierungen ...")
+
+        def arbeit():
+            try:
+                auskunft = akt.nachsehen(w.VERSION)
+                self.update_meldungen.put(("GEFUNDEN", auskunft))
+            except akt.KeinUpdate as e:
+                self.update_meldungen.put(("NICHTS", str(e)))
+            except Exception as e:                      # nie das Fenster mitreißen
+                self.update_meldungen.put(("NICHTS", str(e)))
+
+        threading.Thread(target=arbeit, daemon=True).start()
+
+    def _update_holen(self, auskunft):
+        """Das kleine Paket laden und für den nächsten Start bereitlegen."""
+        if self._update_laeuft:
+            return
+        self._update_laeuft = True
+        self._streifen_zeigen(f"Version {auskunft['version']} wird geladen ...")
+
+        def arbeit():
+            try:
+                akt.herunterladen(auskunft, w.PROG_DIR)
+                self.update_meldungen.put(("GELADEN", auskunft))
+            except akt.KeinUpdate as e:
+                self.update_meldungen.put(("FEHLGESCHLAGEN", str(e)))
+            except Exception as e:
+                self.update_meldungen.put(("FEHLGESCHLAGEN", str(e)))
+
+        threading.Thread(target=arbeit, daemon=True).start()
+
+    def _update_neu_starten(self):
+        """Das Programm neu starten, damit start.py die neue Fassung einsetzt."""
+        if self.laeuft:
+            messagebox.showinfo(
+                "Wasserzeichen",
+                "Es läuft gerade eine Verarbeitung.\n\n"
+                "Die neue Fassung wird beim nächsten Start von allein übernommen.")
+            return
+        try:
+            w.einstellungen_speichern(self.einst)
+        except OSError:
+            pass
+        if getattr(sys, "frozen", False):
+            befehl = [sys.executable]
+        else:
+            befehl = [sys.executable, os.path.join(w.PROG_DIR, "start.py")]
+        try:
+            subprocess.Popen(befehl, close_fds=True)
+        except OSError as e:
+            messagebox.showerror("Wasserzeichen",
+                                 f"Neustart nicht möglich: {e}\n\n"
+                                 "Bitte das Programm von Hand neu starten.")
+            return
+        self.destroy()
+
+    def _update_meldung(self, art, inhalt):
+        if art == "GEFUNDEN":
+            if inhalt["paket"]:
+                self._streifen_zeigen(
+                    f"Version {inhalt['version']} ist verfügbar.",
+                    "Jetzt aktualisieren", lambda: self._update_holen(inhalt))
+            else:
+                # Braucht eine neue Bibliothek: das kleine Paket reicht nicht.
+                self._streifen_zeigen(
+                    f"Version {inhalt['version']} ist verfügbar — als vollständige Installation.",
+                    "Download öffnen", lambda: webbrowser.open(inhalt["seite"]))
+        elif art == "GELADEN":
+            self._streifen_zeigen(
+                f"Version {inhalt['version']} ist bereit.",
+                "Neu starten", self._update_neu_starten)
+        elif art == "FEHLGESCHLAGEN":
+            self._streifen_zeigen(f"Aktualisierung nicht möglich: {inhalt}")
+            self.after(8000, self._streifen_verbergen)
+        elif art == "NICHTS":
+            if self._streifen_sichtbar:
+                self._streifen_zeigen(inhalt)
+                self.after(5000, self._streifen_verbergen)
+
     def _meldungen_abholen(self):
         """Meldungen aus dem Arbeits-Thread ins Fenster holen (Tk ist nicht thread-sicher)."""
+        while True:
+            try:
+                art, inhalt = self.update_meldungen.get_nowait()
+            except queue.Empty:
+                break
+            self._update_laeuft = False
+            self._update_meldung(art, inhalt)
+
         while True:
             try:
                 eintrag = self.meldungen.get_nowait()
@@ -415,12 +585,17 @@ class Fenster(tk.Tk):
         self.destroy()
 
 
-def main():
-    """Einstiegspunkt — direkt aufgerufen oder aus start.py der fertigen exe."""
-    try:
-        Fenster().mainloop()
-    except tk.TclError as e:
-        sys.exit(f"Das Fenster konnte nicht geöffnet werden: {e}")
+def main(nach_start=None):
+    """Einstiegspunkt — direkt aufgerufen oder aus start.py der fertigen exe.
+
+    „nach_start“ wird aufgerufen, sobald das Fenster nachweislich steht. start.py
+    verwirft daraufhin die vorherige Fassung: Ein Update gilt erst dann als
+    gelungen, wenn wirklich ein Fenster zu sehen war.
+    """
+    fenster = Fenster()
+    if nach_start:
+        fenster.after(2000, nach_start)
+    fenster.mainloop()
 
 
 if __name__ == "__main__":

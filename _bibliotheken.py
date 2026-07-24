@@ -41,6 +41,7 @@ except ImportError:
 # --- Standardbibliothek, die PyInstaller sonst wegoptimiert
 import json                       # noqa: F401
 import queue                      # noqa: F401
+import re                         # noqa: F401
 import shutil                     # noqa: F401
 import subprocess                 # noqa: F401
 import threading                  # noqa: F401

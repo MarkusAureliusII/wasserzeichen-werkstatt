@@ -1,7 +1,7 @@
 ; Inno Setup 6 — baut aus dem fertigen dist\Wasserzeichen\ eine Setup-Datei.
 ; Wird von bauen.bat aufgerufen, lässt sich aber auch direkt in Inno Setup öffnen.
 ;
-; Zwei Festlegungen sind hier wichtig und kein Zufall:
+; Drei Festlegungen sind hier wichtig und kein Zufall:
 ;
 ;   1. Installation nach LocalAppData statt "Programme". Damit braucht weder die
 ;      Installation noch ein späteres Update Administratorrechte — ein Update,
@@ -67,23 +67,23 @@ Source: "..\dist\Wasserzeichen\*"; DestDir: "{app}"; \
 
 ; Nutzdaten: nur anlegen, wenn noch nicht vorhanden. "onlyifdoesntexist"
 ; schützt das eingerichtete Logo und die Einstellungen bei einer Neuinstallation.
-Source: "daten\wasserzeichen.png"; DestDir: "{userprofile}\Wasserzeichen"; \
+Source: "daten\wasserzeichen.png"; DestDir: "{%USERPROFILE}\Wasserzeichen"; \
     Flags: onlyifdoesntexist uninsneveruninstall skipifsourcedoesntexist
-Source: "daten\beschriftung.json"; DestDir: "{userprofile}\Wasserzeichen"; \
+Source: "daten\beschriftung.json"; DestDir: "{%USERPROFILE}\Wasserzeichen"; \
     Flags: onlyifdoesntexist uninsneveruninstall skipifsourcedoesntexist
-Source: "ANLEITUNG.txt"; DestDir: "{userprofile}\Wasserzeichen"; \
+Source: "ANLEITUNG.txt"; DestDir: "{%USERPROFILE}\Wasserzeichen"; \
     Flags: ignoreversion uninsneveruninstall
 
 [Dirs]
 ; Ablageordner vorab anlegen, damit sie nach der Installation schon sichtbar sind.
-Name: "{userprofile}\Wasserzeichen"; Flags: uninsneveruninstall
-Name: "{userprofile}\Wasserzeichen\input"; Flags: uninsneveruninstall
-Name: "{userprofile}\Wasserzeichen\input\erledigt"; Flags: uninsneveruninstall
-Name: "{userprofile}\Wasserzeichen\output"; Flags: uninsneveruninstall
+Name: "{%USERPROFILE}\Wasserzeichen"; Flags: uninsneveruninstall
+Name: "{%USERPROFILE}\Wasserzeichen\input"; Flags: uninsneveruninstall
+Name: "{%USERPROFILE}\Wasserzeichen\input\erledigt"; Flags: uninsneveruninstall
+Name: "{%USERPROFILE}\Wasserzeichen\output"; Flags: uninsneveruninstall
 
 [Icons]
 Name: "{group}\{#Name}"; Filename: "{app}\{#Exe}"
-Name: "{group}\Ablageordner öffnen"; Filename: "{userprofile}\Wasserzeichen"
+Name: "{group}\Ablageordner öffnen"; Filename: "{%USERPROFILE}\Wasserzeichen"
 Name: "{group}\{#Name} deinstallieren"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#Name}"; Filename: "{app}\{#Exe}"; Tasks: desktopicon
 
@@ -92,6 +92,10 @@ Filename: "{app}\{#Exe}"; Description: "{#Name} jetzt starten"; \
     Flags: nowait postinstall skipifsilent
 
 [UninstallDelete]
-; Beim Deinstallieren nur Programmreste entfernen — Dokumente bleiben unberührt.
+; Beim Deinstallieren nur Programmreste entfernen — Nutzdaten bleiben unberührt.
+; app.alt und app.neu entstehen beim Aktualisieren und koennen ebenfalls weg.
 Type: filesandordirs; Name: "{app}\app"
+Type: filesandordirs; Name: "{app}\app.alt"
+Type: filesandordirs; Name: "{app}\app.neu"
+Type: filesandordirs; Name: "{app}\app.kaputt"
 Type: filesandordirs; Name: "{app}\_internal"
