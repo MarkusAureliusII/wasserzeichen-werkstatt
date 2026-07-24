@@ -1,0 +1,15 @@
+# bauen.bat wird bewusst NICHT normalisiert und liegt mit CRLF im Repo:
+# "eol=crlf" wirkt nur beim git clone, nicht im ZIP-Download von GitHub.
+# cmd.exe verschluckt sich bei reinen LF-Zeilenenden an goto-Sprungmarken und
+# Klammerbloecken, deshalb muss die Datei ueberall CRLF haben.
+*.bat  -text
+
+# Hier genuegt die Umwandlung beim Auschecken.
+*.iss  text eol=crlf
+*.txt  text eol=crlf
+
+# Python und alles andere bleibt bei LF.
+*.py   text eol=lf
+*.yml  text eol=lf
+*.md   text eol=lf
+*.json text eol=lf
