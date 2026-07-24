@@ -7,8 +7,12 @@
 ;      Installation noch ein späteres Update Administratorrechte — ein Update,
 ;      das nach einem Passwort fragt, scheitert beim Endnutzer schlicht.
 ;   2. Fotos, Logo und Einstellungen liegen NICHT im Programmordner, sondern
-;      unter "Dokumente\Wasserzeichen". Eine Neuinstallation kann sie damit
+;      unter "%USERPROFILE%\Wasserzeichen". Eine Neuinstallation kann sie damit
 ;      nicht versehentlich mitlöschen.
+;   3. Bewusst dort und nicht unter "Dokumente": OneDrive übernimmt Desktop,
+;      Dokumente und Bilder und würde jedes verarbeitete Foto und Video in die
+;      Cloud schieben — bei Veranstaltungsaufnahmen schnell mehrere Gigabyte.
+;      Das Benutzerverzeichnis selbst rührt OneDrive nicht an.
 
 #define Name      "Wasserzeichen"
 #define Exe       "Wasserzeichen.exe"
@@ -63,23 +67,23 @@ Source: "..\dist\Wasserzeichen\*"; DestDir: "{app}"; \
 
 ; Nutzdaten: nur anlegen, wenn noch nicht vorhanden. "onlyifdoesntexist"
 ; schützt das eingerichtete Logo und die Einstellungen bei einer Neuinstallation.
-Source: "daten\wasserzeichen.png"; DestDir: "{userdocs}\Wasserzeichen"; \
+Source: "daten\wasserzeichen.png"; DestDir: "{userprofile}\Wasserzeichen"; \
     Flags: onlyifdoesntexist uninsneveruninstall skipifsourcedoesntexist
-Source: "daten\beschriftung.json"; DestDir: "{userdocs}\Wasserzeichen"; \
+Source: "daten\beschriftung.json"; DestDir: "{userprofile}\Wasserzeichen"; \
     Flags: onlyifdoesntexist uninsneveruninstall skipifsourcedoesntexist
-Source: "ANLEITUNG.txt"; DestDir: "{userdocs}\Wasserzeichen"; \
+Source: "ANLEITUNG.txt"; DestDir: "{userprofile}\Wasserzeichen"; \
     Flags: ignoreversion uninsneveruninstall
 
 [Dirs]
 ; Ablageordner vorab anlegen, damit sie nach der Installation schon sichtbar sind.
-Name: "{userdocs}\Wasserzeichen"; Flags: uninsneveruninstall
-Name: "{userdocs}\Wasserzeichen\input"; Flags: uninsneveruninstall
-Name: "{userdocs}\Wasserzeichen\input\erledigt"; Flags: uninsneveruninstall
-Name: "{userdocs}\Wasserzeichen\output"; Flags: uninsneveruninstall
+Name: "{userprofile}\Wasserzeichen"; Flags: uninsneveruninstall
+Name: "{userprofile}\Wasserzeichen\input"; Flags: uninsneveruninstall
+Name: "{userprofile}\Wasserzeichen\input\erledigt"; Flags: uninsneveruninstall
+Name: "{userprofile}\Wasserzeichen\output"; Flags: uninsneveruninstall
 
 [Icons]
 Name: "{group}\{#Name}"; Filename: "{app}\{#Exe}"
-Name: "{group}\Ablageordner öffnen"; Filename: "{userdocs}\Wasserzeichen"
+Name: "{group}\Ablageordner öffnen"; Filename: "{userprofile}\Wasserzeichen"
 Name: "{group}\{#Name} deinstallieren"; Filename: "{uninstallexe}"
 Name: "{autodesktop}\{#Name}"; Filename: "{app}\{#Exe}"; Tasks: desktopicon
 

@@ -26,7 +26,15 @@ SO GEHT ES
 WO LIEGT WAS
 ------------
 
-Alles liegt im Ordner "Wasserzeichen" in deinen Dokumenten:
+Alles liegt im Ordner "Wasserzeichen" direkt in deinem Benutzerordner,
+also unter C:\Benutzer\<dein Name>\Wasserzeichen.
+
+Am schnellsten kommst du hin über das Startmenü:
+"Wasserzeichen" -> "Ablageordner öffnen". Oder über die Knöpfe
+"Ergebnisse öffnen" und "Frühere Läufe" im Programm selbst.
+
+Der Ordner liegt bewusst nicht in deinen Dokumenten: OneDrive würde
+sonst jedes Foto und jedes Video in die Cloud hochladen.
 
   input\            hier kannst du Dateien auch direkt hineinkopieren
   input\erledigt\   fertig verarbeitete Originale — unverändert
