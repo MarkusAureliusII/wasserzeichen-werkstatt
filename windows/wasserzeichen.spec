@@ -60,7 +60,10 @@ exe = EXE(
     strip=False,
     upx=False,          # UPX-gepackte Dateien schlagen bei Virenscannern öfter an
     console=False,      # sonst öffnet Windows ein schwarzes Konsolenfenster mit
-    icon=None,
+    # Symbol der exe und aller Verknüpfungen. Steckt fest in der Datei und lässt
+    # sich nur mit einem neuen Setup ändern — das Fenstersymbol dagegen liegt als
+    # app/symbol.png daneben und geht auch per kleinem Update.
+    icon=os.path.join(SPECPATH, "symbol.ico"),  # noqa: F821
 )
 
 coll = COLLECT(

@@ -83,7 +83,7 @@ jobs:
           $ziel = "dist\Wasserzeichen"
           if (-not (Test-Path "$ziel\Wasserzeichen.exe")) { throw "Wasserzeichen.exe wurde nicht erzeugt." }
           New-Item -ItemType Directory -Force -Path "$ziel\app" | Out-Null
-          Copy-Item oberflaeche.py, wasserzeichen.py, gestaltung.py, aktualisierung.py, version.txt "$ziel\app\" -Force
+          Copy-Item oberflaeche.py, wasserzeichen.py, gestaltung.py, aktualisierung.py, version.txt, symbol.png "$ziel\app\" -Force
           Copy-Item windows\werkzeuge\ffmpeg.exe, windows\werkzeuge\ffprobe.exe $ziel -Force
           Copy-Item windows\ANLEITUNG.txt $ziel -Force
           $lizenz = @(

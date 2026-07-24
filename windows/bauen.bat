@@ -94,6 +94,7 @@ copy /y "%WURZEL%\wasserzeichen.py" "%ZIEL%\app\" >nul
 copy /y "%WURZEL%\gestaltung.py"    "%ZIEL%\app\" >nul
 copy /y "%WURZEL%\aktualisierung.py" "%ZIEL%\app\" >nul
 copy /y "%WURZEL%\version.txt"      "%ZIEL%\app\" >nul
+copy /y "%WURZEL%\symbol.png"       "%ZIEL%\app\" >nul
 copy /y "%BAU%\ANLEITUNG.txt"       "%ZIEL%\"    >nul
 
 set "FEHLT="
