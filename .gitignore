@@ -1,0 +1,20 @@
+# Logo, Aufschriften und Nutzdaten bleiben lokal
+wasserzeichen.png
+beschriftung.json
+einstellungen.json
+input/
+output/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Build
+build/
+dist/
+*.spec
+
+# macOS
+.DS_Store
