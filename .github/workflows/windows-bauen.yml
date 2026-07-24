@@ -109,6 +109,20 @@ jobs:
           python $pruef
           Remove-Item $pruef
 
+          # Sind die Bibliotheken, die nur bei bestimmten Dateitypen gebraucht
+          # werden, wirklich mitgepackt? Ohne diese Kontrolle fiele ein
+          # misslungenes collect_all erst beim Endnutzer auf — und zwar erst,
+          # wenn er die erste RAW-Datei oder ein iPhone-Foto verarbeitet.
+          $intern = "dist\Wasserzeichen\_internal"
+          $fehlend = @()
+          foreach ($paket in @("rawpy", "pillow_heif", "certifi", "PIL")) {
+            if (-not (Test-Path "$intern\$paket")) { $fehlend += $paket }
+          }
+          if ($fehlend.Count -gt 0) {
+            throw "Im Paket fehlen: $($fehlend -join ', '). RAW, HEIC oder die Update-Pruefung wuerden beim Nutzer scheitern."
+          }
+          Write-Host "rawpy, pillow_heif, certifi und PIL sind mitgepackt."
+
       - name: Update-Paket schnüren
         shell: pwsh
         run: |

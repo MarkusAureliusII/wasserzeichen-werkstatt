@@ -354,25 +354,40 @@ def _ohne_fenster():
 
 
 def _video_angaben(pfad):
-    """Breite, Bitrate und Länge des Videos. Länge ist für den Fortschritt nötig."""
+    """Breite, Bitrate und Länge des Videos. Länge ist für den Fortschritt nötig.
+
+    Bewusst über JSON und nicht zeilenweise: AVCHD-Dateien von Sony (.mts/.m2ts)
+    melden ihren Videostream doppelt, wodurch sich eine nach Position gelesene
+    Liste verschiebt — die zweite Breitenangabe landete vorher in der Dauer.
+    """
     probe = subprocess.run(
-        [_werkzeug("ffprobe"), "-v", "quiet", "-select_streams", "v:0", "-show_entries",
-         "stream=width,bit_rate:format=duration", "-of", "default=nw=1:nk=1", pfad],
+        [_werkzeug("ffprobe"), "-v", "quiet", "-print_format", "json",
+         "-select_streams", "v:0", "-show_entries",
+         "stream=width,bit_rate:format=duration,bit_rate", pfad],
         capture_output=True, text=True, **_ohne_fenster())
-    zeilen = [z.strip() for z in probe.stdout.strip().splitlines() if z.strip()]
-    if not zeilen:
+    try:
+        daten = json.loads(probe.stdout or "{}")
+    except ValueError:
+        daten = {}
+    strom = (daten.get("streams") or [{}])[0]
+    format_teil = daten.get("format") or {}
+    if not strom.get("width"):
         raise WerkstattFehler(f"Video nicht lesbar: {os.path.basename(pfad)}")
 
-    def zahl(i, ersatz):
+    def zahl(wert, ersatz=0.0):
         try:
-            wert = float(zeilen[i])
-            return wert if wert > 0 else ersatz
-        except (IndexError, ValueError):
+            gelesen = float(wert)
+            return gelesen if gelesen > 0 else ersatz
+        except (TypeError, ValueError):
             return ersatz
 
-    breite = int(zahl(0, 1920))
-    bitrate = int(zahl(1, 8_000_000))   # z.B. VP9/mov ohne bit_rate-Angabe
-    dauer = zahl(2, 0.0)                # 0 = unbekannt, dann ohne Prozentangabe
+    breite = int(zahl(strom.get("width"), 1920))
+    # AVCHD gibt je Stream keine Bitrate an; dann die des ganzen Containers nehmen,
+    # sonst würde ein 24-Mbit-Video auf den Ersatzwert heruntergerechnet.
+    bitrate = int(zahl(strom.get("bit_rate"))
+                  or zahl(format_teil.get("bit_rate"))
+                  or 8_000_000)
+    dauer = zahl(format_teil.get("duration"))   # 0 = unbekannt, dann ohne Prozente
     return breite, bitrate, dauer
 
 
