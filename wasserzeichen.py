@@ -37,9 +37,31 @@ IST_WINDOWS = sys.platform.startswith("win")
 # Bei einer PyInstaller-exe liegt der Programmordner neben der exe, nicht im _internal/;
 # die Nutzdaten stehen dann in „Dokumente/Wasserzeichen", wo der Nutzer sie auch findet.
 # Im Entwicklerbetrieb (Skript direkt gestartet) bleibt beides zusammen wie bisher.
+
+def _dokumente_ordner():
+    """Der tatsächliche Dokumente-Ordner des Nutzers.
+
+    Nicht einfach „~/Documents" annehmen: Unter Windows verschiebt OneDrive ihn
+    regelmäßig nach „~/OneDrive/Dokumente". Der Installer legt das Logo über
+    {userdocs} ab, was der Umleitung folgt — täten wir das nicht, suchte das
+    Programm sein Logo an einer anderen Stelle, als es installiert wurde.
+    """
+    if IST_WINDOWS:
+        try:
+            import winreg
+            schluessel = r"Software\Microsoft\Windows\CurrentVersion\Explorer\Shell Folders"
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, schluessel) as k:
+                pfad = winreg.QueryValueEx(k, "Personal")[0]
+            if pfad and os.path.isdir(pfad):
+                return pfad
+        except Exception:
+            pass  # Registry unlesbar — dann eben der übliche Ort
+    return os.path.join(os.path.expanduser("~"), "Documents")
+
+
 if getattr(sys, "frozen", False):
     PROG_DIR = os.path.dirname(os.path.abspath(sys.executable))
-    DATEN_DIR = os.path.join(os.path.expanduser("~"), "Documents", "Wasserzeichen")
+    DATEN_DIR = os.path.join(_dokumente_ordner(), "Wasserzeichen")
     os.makedirs(DATEN_DIR, exist_ok=True)
 else:
     PROG_DIR = os.path.dirname(os.path.abspath(__file__))

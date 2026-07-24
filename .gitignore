@@ -5,9 +5,14 @@ einstellungen.json
 input/
 output/
 
-# Windows-Bau: Kundendaten und mitgelieferte Fremdprogramme
-windows/daten/
+# Windows-Bau: mitgelieferte Fremdprogramme (zu groß fürs Repo)
 windows/werkzeuge/
+
+# Kundendaten fürs fertige Setup. Nur diese zwei Dateien, sonst nichts —
+# mit "windows/daten/" ließe sich darin nichts wieder einschließen.
+windows/daten/*
+!windows/daten/wasserzeichen.png
+!windows/daten/beschriftung.json
 
 # Python
 __pycache__/
