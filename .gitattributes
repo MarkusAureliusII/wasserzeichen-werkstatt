@@ -8,6 +8,11 @@
 *.iss  text eol=crlf
 *.txt  text eol=crlf
 
+# version.txt ist keine Lesedatei, sondern Datenquelle fuer Python, PowerShell
+# und Inno Setup zugleich — die bleibt bei LF, damit kein Wagenruecklauf in
+# Versionsnummern und daraus gebauten Dateinamen landet.
+version.txt text eol=lf
+
 # Python und alles andere bleibt bei LF.
 *.py   text eol=lf
 *.yml  text eol=lf
