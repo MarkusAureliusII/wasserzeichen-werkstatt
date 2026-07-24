@@ -10,7 +10,14 @@ Windows Defender verdächtiger aussehen. onedir startet sofort.
 Der Anwendungscode wird hier bewusst NICHT eingebettet; bauen.bat legt ihn
 danach als app/ neben die exe. Nur so bleiben Updates klein.
 """
+import os
+
 from PyInstaller.utils.hooks import collect_all
+
+# Relative Pfade in einer Spec löst PyInstaller gegen das Arbeitsverzeichnis auf,
+# nicht gegen den Ort der Spec. Da sie mal aus der Wurzel (bauen.bat) und mal aus
+# der Cloud aufgerufen wird, alles ausdrücklich von SPECPATH aus rechnen.
+WURZEL = os.path.abspath(os.path.join(SPECPATH, ".."))  # noqa: F821 — von PyInstaller gesetzt
 
 datas, binaries, hiddenimports = [], [], []
 
@@ -28,8 +35,8 @@ for paket in ("rawpy", "pillow_heif", "certifi", "tzdata"):
         print(f"[spec] {paket} übersprungen: {e}")
 
 a = Analysis(
-    ["..\\start.py"],
-    pathex=[".."],
+    [os.path.join(WURZEL, "start.py")],
+    pathex=[WURZEL],
     binaries=binaries,
     datas=datas,
     hiddenimports=hiddenimports,
