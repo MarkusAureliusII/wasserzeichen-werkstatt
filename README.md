@@ -38,5 +38,11 @@ Standard-Widgets ignoriert — so sieht die Oberfläche auf beiden Systemen glei
 python3 oberflaeche.py
 ```
 
+## Fertige Windows-Fassung
+
+Setup-Datei unter [Releases](../../releases/latest). Gebaut wird automatisch auf
+einem Windows-x64-Rechner, sobald ein Tag `v*` gepusht wird — Einzelheiten in
+[windows/LIESMICH.md](windows/LIESMICH.md).
+
 Das Logo wird als `wasserzeichen.png` neben den Skripten erwartet und ist in diesem
 Repository nicht enthalten.

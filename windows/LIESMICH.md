@@ -1,7 +1,36 @@
 # Windows-Anwendung bauen
 
-Diese Anleitung gilt für die Windows-VM (UTM). PyInstaller kann nicht über
-Plattformgrenzen bauen — eine Windows-exe muss auf Windows entstehen.
+## Der normale Weg: GitHub Actions
+
+Gebaut wird in der Cloud, nicht von Hand. Ein Tag genügt:
+
+```
+# version.txt auf die neue Nummer setzen, dann:
+git commit -am "Version 1.1.0"
+git tag v1.1.0
+git push && git push --tags
+```
+
+Der Workflow `.github/workflows/windows-bauen.yml` baut daraufhin auf einem
+Windows-x64-Rechner und hängt Setup-Datei und Update-Paket an ein Release unter
+<https://github.com/MarkusAureliusII/wasserzeichen-werkstatt/releases>.
+
+Ohne Tag lässt sich der Bau auch von Hand unter „Actions" auslösen — dann
+entsteht kein Release, die Dateien liegen 30 Tage als Artefakt bereit.
+
+**Warum nicht in der VM?** Eine Apple-Silicon-VM läuft auf aarch64, und eine dort
+gebaute exe startet auf einem gewöhnlichen Windows-PC nicht. x64 dagegen läuft
+überall, auch auf Windows-on-ARM. Die VM ist zum *Ausprobieren* der fertigen
+Setup-Datei gut, zum Bauen nicht.
+
+**Die Versionsnummer muss zum Tag passen** — der Workflow bricht sonst ab.
+
+---
+
+## Der Ausweichweg: von Hand in einer Windows-VM
+
+Nur nötig, wenn GitHub Actions einmal nicht verfügbar ist. Achtung: Das Ergebnis
+passt zur Architektur der VM — auf Apple Silicon also ARM64, nicht x64.
 
 ## Einmalig einrichten
 
