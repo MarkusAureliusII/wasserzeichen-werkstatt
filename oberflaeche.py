@@ -74,6 +74,8 @@ class Fenster(tk.Tk):
         self.after(120, self._meldungen_abholen)
         self.protocol("WM_DELETE_WINDOW", self._schliessen)
         self._symbol_setzen()
+        # Erst wenn das Fenster gezeichnet ist, sonst greift das Nachvornholen ins Leere.
+        self.after(80, self._nach_vorn)
 
         if akt.bereitgelegt(w.PROG_DIR):
             # Beim letzten Mal geladen, aber noch nicht neu gestartet.
@@ -82,6 +84,25 @@ class Fenster(tk.Tk):
         else:
             # Etwas verzögert, damit das Fenster zuerst steht.
             self.after(1500, self._update_pruefen)
+
+    def _nach_vorn(self):
+        """Das Fenster beim Start wirklich nach vorn holen.
+
+        Windows legt ein neu erscheinendes Fenster hinter das gerade aktive:
+        Nach der Installation hat der Installer den Fokus, und beim Doppelklick
+        vergeht durch das Laden der Bibliotheken eine Sekunde, in der Windows
+        ihn weitergibt. Ein Fenster darf sich den Fokus nicht einfach nehmen —
+        wohl aber kurz „immer oben“ sein. Das Flag wird sofort wieder gelöst,
+        damit das Fenster danach normal in den Stapel eingereiht bleibt.
+        """
+        try:
+            self.deiconify()
+            self.lift()
+            self.attributes("-topmost", True)
+            self.focus_force()
+            self.after(400, lambda: self.attributes("-topmost", False))
+        except tk.TclError:
+            pass  # Fenster schon zu — dann eben nicht
 
     def _symbol_setzen(self):
         """Fenstersymbol aus app/symbol.png, falls eines mitgeliefert wurde.
