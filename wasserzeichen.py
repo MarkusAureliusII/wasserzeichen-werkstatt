@@ -17,7 +17,7 @@ Originale wandern nach  input/erledigt/  — nichts wird gelöscht.
 Läuft unter macOS und Windows aus derselben Datei: unter Windows werden
 ffmpeg.exe/ffprobe.exe aus dem Tool-Ordner genutzt und RAW über rawpy gelesen.
 """
-import json, os, re, shutil, subprocess, sys
+import json, os, re, shutil, subprocess, sys, tempfile
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageOps
 
@@ -337,38 +337,145 @@ def foto_stempeln(pfad, einst=None, lauf=None):
     return ziel
 
 
-def video_stempeln(pfad, einst=None, lauf=None):
-    einst = einst or einstellungen_laden()
-    ordner = _zielordner(lauf, "videos")
+class Abgebrochen(Exception):
+    """Der Benutzer hat mittendrin abgebrochen — kein Fehler, nur ein Ende."""
+
+
+def _ohne_fenster():
+    """Zusatzangaben, damit unter Windows kein Konsolenfenster aufgeht.
+
+    Die exe läuft ohne Konsole. Startet sie ffmpeg, gibt Windows dem Kindprozess
+    ein eigenes schwarzes Fenster — das sieht nach Fehler aus und stiehlt den
+    Fokus. CREATE_NO_WINDOW unterbindet das.
+    """
+    if IST_WINDOWS:
+        return {"creationflags": getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)}
+    return {}
+
+
+def _video_angaben(pfad):
+    """Breite, Bitrate und Länge des Videos. Länge ist für den Fortschritt nötig."""
     probe = subprocess.run(
         [_werkzeug("ffprobe"), "-v", "quiet", "-select_streams", "v:0", "-show_entries",
-         "stream=width,bit_rate", "-of", "csv=p=0", pfad], capture_output=True, text=True)
-    zeilen = probe.stdout.strip().splitlines()
+         "stream=width,bit_rate:format=duration", "-of", "default=nw=1:nk=1", pfad],
+        capture_output=True, text=True, **_ohne_fenster())
+    zeilen = [z.strip() for z in probe.stdout.strip().splitlines() if z.strip()]
     if not zeilen:
         raise WerkstattFehler(f"Video nicht lesbar: {os.path.basename(pfad)}")
-    werte = zeilen[0].rstrip(",").split(",")
-    breite = int(werte[0])
+
+    def zahl(i, ersatz):
+        try:
+            wert = float(zeilen[i])
+            return wert if wert > 0 else ersatz
+        except (IndexError, ValueError):
+            return ersatz
+
+    breite = int(zahl(0, 1920))
+    bitrate = int(zahl(1, 8_000_000))   # z.B. VP9/mov ohne bit_rate-Angabe
+    dauer = zahl(2, 0.0)                # 0 = unbekannt, dann ohne Prozentangabe
+    return breite, bitrate, dauer
+
+
+def _fortschritt_lesen(pfad, dauer):
+    """Aus ffmpegs Fortschrittsdatei den Stand in Prozent ziehen."""
+    if dauer <= 0:
+        return None
     try:
-        original_bps = int(werte[1])
-    except (IndexError, ValueError):
-        original_bps = 8_000_000  # z.B. VP9/mov ohne bit_rate-Angabe
+        with open(pfad, encoding="utf-8", errors="ignore") as f:
+            zeilen = f.readlines()
+    except OSError:
+        return None
+    for zeile in reversed(zeilen):
+        if zeile.startswith("out_time_ms="):
+            try:
+                sekunden = int(zeile.split("=", 1)[1]) / 1_000_000
+            except ValueError:
+                return None
+            return max(0, min(100, int(sekunden / dauer * 100)))
+    return None
+
+
+def video_stempeln(pfad, einst=None, lauf=None, melden=None, abbruch=None):
+    """Ein Video stempeln.
+
+    melden: bekommt gelegentlich den Stand in Prozent — ohne das säße der
+    Benutzer bei einem langen Video minutenlang vor einem stillen Fenster.
+    abbruch: wird währenddessen abgefragt; ffmpeg wird dann wirklich beendet
+    und nicht erst nach der Datei.
+    """
+    einst = einst or einstellungen_laden()
+    ordner = _zielordner(lauf, "videos")
+    breite, original_bps, dauer = _video_angaben(pfad)
     deckel = 40_000_000 if breite >= 3000 else 14_000_000  # 4K braucht mehr Luft
     ziel_bps = min(deckel, max(2_000_000, int(original_bps * 1.5)))
-    wz = _logo_skaliert(breite, einst)
-    wz_tmp = os.path.join(DATEN_DIR, ".wz_video_tmp.png")
-    wz.save(wz_tmp)
+
+    # Hilfsdateien in einen echten Zwischenablage-Ordner: im Ablageordner des
+    # Benutzers haben sie nichts zu suchen, und ein führender Punkt versteckt
+    # unter Windows gar nichts.
+    arbeitsordner = tempfile.mkdtemp(prefix="wasserzeichen-")
+    wz_tmp = os.path.join(arbeitsordner, "logo.png")
+    fortschritt_datei = os.path.join(arbeitsordner, "fortschritt.txt")
+    meldungen_datei = os.path.join(arbeitsordner, "meldungen.txt")
+    _logo_skaliert(breite, einst).save(wz_tmp)
+
     ziel = os.path.join(ordner, os.path.splitext(os.path.basename(pfad))[0] + "_wz.mp4")
     cmd = [_werkzeug("ffmpeg"), "-y", "-hide_banner", "-loglevel", "warning",
+           "-progress", fortschritt_datei, "-nostdin",
            "-i", pfad, "-i", wz_tmp,
            "-filter_complex", f"[0:v][1:v]overlay={_ecken_ausdruck(breite, einst)}",
            *_video_encoder(), "-b:v", str(ziel_bps),
            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", ziel]
+
+    zuletzt_gemeldet = -1
     try:
-        subprocess.run(cmd, check=True)
+        # Ausgabe in eine Datei statt in eine Röhre: Eine volle Röhre, die
+        # niemand leert, würde ffmpeg mitten im Lauf blockieren.
+        with open(meldungen_datei, "w", encoding="utf-8") as ausgabe:
+            prozess = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                       stdout=ausgabe, stderr=ausgabe,
+                                       **_ohne_fenster())
+            while True:
+                try:
+                    prozess.wait(timeout=0.5)
+                    break
+                except subprocess.TimeoutExpired:
+                    pass
+                if abbruch and abbruch():
+                    prozess.terminate()
+                    try:
+                        prozess.wait(timeout=5)
+                    except subprocess.TimeoutExpired:
+                        prozess.kill()
+                    raise Abgebrochen()
+                if melden:
+                    stand = _fortschritt_lesen(fortschritt_datei, dauer)
+                    if stand is not None and stand >= zuletzt_gemeldet + 5:
+                        zuletzt_gemeldet = stand
+                        melden(f"    ... {stand} %")
+
+        if prozess.returncode != 0:
+            grund = ""
+            try:
+                with open(meldungen_datei, encoding="utf-8", errors="ignore") as f:
+                    zeilen = [z.strip() for z in f.readlines() if z.strip()]
+                grund = " ".join(zeilen[-3:])[:300]
+            except OSError:
+                pass
+            raise WerkstattFehler(
+                f"Das Video ließ sich nicht verarbeiten: {os.path.basename(pfad)}"
+                + (f"\n{grund}" if grund else ""))
+        return ziel
+
+    except Abgebrochen:
+        # Angefangene Zieldatei nicht liegen lassen — sie wäre unbrauchbar.
+        if os.path.exists(ziel):
+            try:
+                os.remove(ziel)
+            except OSError:
+                pass
+        raise
     finally:
-        if os.path.exists(wz_tmp):
-            os.remove(wz_tmp)
-    return ziel
+        shutil.rmtree(arbeitsordner, ignore_errors=True)
 
 
 # ---------------------------------------------------------------- Stapel
@@ -418,11 +525,14 @@ def alles_verarbeiten(einst=None, melden=print, abbruch=None):
         melden(f"[{fertig + len(fehler) + 1}/{gesamt}] {art}: {name}")
         try:
             ziel = (foto_stempeln(pfad, einst, lauf) if art == "Foto"
-                    else video_stempeln(pfad, einst, lauf))
+                    else video_stempeln(pfad, einst, lauf, melden=melden, abbruch=abbruch))
             shutil.move(pfad, os.path.join(DONE_DIR, name))
             melden(f"    fertig -> {os.path.basename(os.path.dirname(ziel))}/"
                    f"{os.path.basename(ziel)}")
             fertig += 1
+        except Abgebrochen:
+            melden("Abgebrochen — die angefangene Datei bleibt in input/ liegen.")
+            break
         except Exception as e:  # eine kaputte Datei darf den Stapel nicht stoppen
             grund = _klartext(e)
             fehler.append((name, grund))

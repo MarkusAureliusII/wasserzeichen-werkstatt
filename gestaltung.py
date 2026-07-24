@@ -187,41 +187,59 @@ class Schieber(tk.Frame):
 
 
 class EckenWahl(tk.Frame):
-    """Vier Kacheln, die je ein Bild mit dem Logo in der jeweiligen Ecke andeuten."""
+    """Vier Kacheln, die je ein Bild mit dem Logo in der jeweiligen Ecke andeuten.
+
+    Die Kacheln teilen sich die verfügbare Breite und wachsen mit dem Fenster.
+    Gezeichnet wird deshalb erst, wenn die Leinwand ihre Größe kennt, und danach
+    bei jeder Änderung neu — die Maße stehen nicht fest, sondern werden aus der
+    tatsächlichen Kachelgröße abgeleitet.
+    """
 
     ORDNUNG = [("oben-links", 0, 0), ("oben-rechts", 0, 1),
                ("unten-links", 1, 0), ("unten-rechts", 1, 1)]
-    KACHEL_B, KACHEL_H = 74, 52
+    KACHEL_H = 56
+    ABSTAND = 8
 
     def __init__(self, eltern, wert, bei_aenderung=None):
         super().__init__(eltern, bg=FARBE["karte"])
         self.wert = wert
         self.bei_aenderung = bei_aenderung
         self.kacheln = {}
+        # uniform sorgt dafür, dass beide Spalten immer gleich breit bleiben
+        self.columnconfigure(0, weight=1, uniform="ecke")
+        self.columnconfigure(1, weight=1, uniform="ecke")
         for ecke, zeile, spalte in self.ORDNUNG:
-            leinwand = tk.Canvas(self, width=self.KACHEL_B, height=self.KACHEL_H,
-                                 bg=FARBE["karte"], highlightthickness=0, cursor="hand2")
-            leinwand.grid(row=zeile, column=spalte, padx=(0, 8), pady=(0, 8))
+            leinwand = tk.Canvas(self, height=self.KACHEL_H, bg=FARBE["karte"],
+                                 highlightthickness=0, cursor="hand2")
+            # Abstand auf beide Spalten gleich verteilen, sonst wird die linke
+            # Kachel um die Lücke schmaler als die rechte.
+            halb = self.ABSTAND // 2
+            leinwand.grid(row=zeile, column=spalte, sticky="nsew",
+                          padx=(0, halb) if spalte == 0 else (halb, 0),
+                          pady=(0, self.ABSTAND) if zeile == 0 else 0)
             leinwand.bind("<Button-1>", lambda _, e=ecke: self._waehlen(e))
             leinwand.bind("<Enter>", lambda _, e=ecke: self._zeichne(e, ueber=True))
             leinwand.bind("<Leave>", lambda _, e=ecke: self._zeichne(e))
+            leinwand.bind("<Configure>", lambda _, e=ecke: self._zeichne(e))
             self.kacheln[ecke] = leinwand
-            self._zeichne(ecke)
 
     def _zeichne(self, ecke, ueber=False):
         leinwand = self.kacheln[ecke]
+        b, h = leinwand.winfo_width(), leinwand.winfo_height()
+        if b <= 1 or h <= 1:
+            return  # Größe steht noch nicht fest; <Configure> holt das nach
         gewaehlt = ecke == self.wert
-        b, h = self.KACHEL_B, self.KACHEL_H
         leinwand.delete("all")
         rand = FARBE["akzent"] if gewaehlt else (FARBE["linie_hell"] if ueber
                                                 else FARBE["linie"])
         rundes_rechteck(leinwand, 2, 2, b - 2, h - 2, 4,
                         fill=FARBE["karte_hell"] if gewaehlt else FARBE["feld"],
                         outline=rand)
-        # angedeutetes Logo in der jeweiligen Ecke
-        lb, lh, abstand = 26, 9, 8
-        x = abstand if ecke.endswith("links") else b - abstand - lb
-        y = abstand if ecke.startswith("oben") else h - abstand - lh
+        # angedeutetes Logo, in denselben Verhältnissen wie im echten Bild
+        lb, lh = max(14, int(b * 0.34)), max(6, int(h * 0.17))
+        abstand_x, abstand_y = max(5, int(b * 0.10)), max(5, int(h * 0.15))
+        x = abstand_x if ecke.endswith("links") else b - abstand_x - lb
+        y = abstand_y if ecke.startswith("oben") else h - abstand_y - lh
         leinwand.create_rectangle(x, y, x + lb, y + lh,
                                   fill=FARBE["akzent"] if gewaehlt else FARBE["text_still"],
                                   outline="")

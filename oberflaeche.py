@@ -159,7 +159,11 @@ class Fenster(tk.Tk):
     def _mitte(self):
         mitte = tk.Frame(self, bg=FARBE["grund"])
         mitte.grid(row=1, column=0, sticky="nsew", padx=28)
-        mitte.columnconfigure(0, weight=1)
+        # Beide Spalten wachsen mit, die Vorschau aber viermal so stark: sie
+        # profitiert am meisten von Platz, die Einstellungen sollen nur nicht
+        # gestaucht bleiben, wenn das Fenster größer wird.
+        mitte.columnconfigure(0, weight=4)
+        mitte.columnconfigure(1, weight=1, minsize=330)
         mitte.rowconfigure(0, weight=1)
 
         # --- Vorschau
@@ -182,7 +186,7 @@ class Fenster(tk.Tk):
         Titel(innen, "Position des Logos").pack(anchor="w", pady=(0, 12))
         self.ecken = EckenWahl(innen, self.einst["ecke"],
                                bei_aenderung=lambda _: self._geaendert())
-        self.ecken.pack(anchor="w", pady=(0, 14))
+        self.ecken.pack(fill="x", pady=(0, 14))
 
         self.s_breite = Schieber(innen, "Größe", 8, 45, self.einst["breite_prozent"],
                                  bei_aenderung=lambda _: self._geaendert())
