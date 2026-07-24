@@ -5,16 +5,23 @@ einstellungen.json
 input/
 output/
 
+# Windows-Bau: Kundendaten und mitgelieferte Fremdprogramme
+windows/daten/
+windows/werkzeuge/
+
 # Python
 __pycache__/
 *.pyc
 .venv/
 venv/
 
-# Build
+# Build-Ergebnisse
 build/
 dist/
+
+# PyInstaller-Specs sind generiert — außer unserer gepflegten
 *.spec
+!windows/wasserzeichen.spec
 
 # macOS
 .DS_Store

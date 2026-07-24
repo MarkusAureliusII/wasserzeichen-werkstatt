@@ -1,0 +1,59 @@
+WASSERZEICHEN — KURZANLEITUNG
+=============================
+
+Das Programm brennt dein Logo unten in deine Fotos und Videos ein.
+
+
+SO GEHT ES
+----------
+
+1. Programm starten (Symbol auf dem Desktop).
+
+2. Auf "Fotos und Videos wählen" klicken und alles aussuchen,
+   was ein Logo bekommen soll. Mehrere auf einmal sind kein Problem.
+
+3. In der Vorschau siehst du sofort, wie es aussehen wird.
+   Falls es dir nicht gefällt: Ecke anklicken oder an den Reglern
+   für Größe, Rand und Deckkraft ziehen.
+
+4. Auf "Verarbeiten" klicken und warten. Videos dauern deutlich
+   länger als Fotos — das ist normal.
+
+5. "Ergebnisse öffnen" anklicken. Dort liegen die fertigen Dateien,
+   von da kannst du sie direkt weiterschicken oder hochladen.
+
+
+WO LIEGT WAS
+------------
+
+Alles liegt im Ordner "Wasserzeichen" in deinen Dokumenten:
+
+  input\            hier kannst du Dateien auch direkt hineinkopieren
+  input\erledigt\   fertig verarbeitete Originale — unverändert
+  output\           die Ergebnisse, sortiert nach Datum und Uhrzeit
+  wasserzeichen.png dein Logo
+
+Deine Originalfotos werden nie verändert und nie gelöscht.
+
+
+WENN ETWAS NICHT KLAPPT
+-----------------------
+
+Eine Datei lässt sich nicht verarbeiten?
+  Das Programm überspringt sie und macht mit dem Rest weiter.
+  Am Ende steht in der Liste, welche Datei es war und warum.
+
+Die Ergebnisse sind in der falschen Reihenfolge?
+  Die Ordner sind nach deutschem Datum benannt (24.07.2026).
+  Im Explorer nach "Änderungsdatum" sortieren, dann stimmt es.
+
+Beim ersten Start erscheint eine Warnung von Windows?
+  Auf "Weitere Informationen" und dann "Trotzdem ausführen" klicken.
+  Das kommt nur beim allerersten Mal.
+
+
+UPDATES
+-------
+
+Wenn eine neuere Version bereitsteht, zeigt das Programm das beim
+Start oben an. Ein Klick genügt, der Rest läuft von allein.

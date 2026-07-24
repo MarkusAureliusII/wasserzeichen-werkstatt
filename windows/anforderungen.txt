@@ -1,0 +1,11 @@
+# Bibliotheken für den Windows-Bau. Installiert bauen.bat in windows\.venv\.
+#
+# Die Liste ist bewusst etwas länger als heute nötig: Was hier fehlt, lässt sich
+# später nicht per kleinem Update nachreichen (siehe _bibliotheken.py).
+
+pyinstaller>=6.3
+pillow>=10.2
+pillow-heif>=0.15      # HEIC vom iPhone
+rawpy>=0.19            # RAW, u. a. Sony .arw — unter macOS macht das sips
+certifi                # Zertifikate für HTTPS
+tzdata                 # Zeitzonen; Windows bringt sie nicht mit

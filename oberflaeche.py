@@ -335,7 +335,7 @@ class Fenster(tk.Tk):
         if not anzahl:
             messagebox.showinfo("Nichts zu tun",
                                 "Es liegen keine Fotos oder Videos bereit.\n\n"
-                                "Bitte unten „Fotos und Videos wählen\" anklicken.")
+                                "Bitte unten „Fotos und Videos wählen“ anklicken.")
             return
         w.einstellungen_speichern(self.einst)
         self.laeuft = True
@@ -393,7 +393,7 @@ class Fenster(tk.Tk):
         elif fertig:
             messagebox.showinfo("Fertig",
                                 f"{fertig} Datei(en) mit Wasserzeichen versehen.{wo}\n\n"
-                                "Mit „Ergebnisse öffnen\" springst du direkt hinein.")
+                                "Mit „Ergebnisse öffnen“ springst du direkt hinein.")
 
     def _schreibe(self, text, marke=None):
         self.protokoll.config(state="normal")
@@ -415,8 +415,13 @@ class Fenster(tk.Tk):
         self.destroy()
 
 
-if __name__ == "__main__":
+def main():
+    """Einstiegspunkt — direkt aufgerufen oder aus start.py der fertigen exe."""
     try:
         Fenster().mainloop()
     except tk.TclError as e:
         sys.exit(f"Das Fenster konnte nicht geöffnet werden: {e}")
+
+
+if __name__ == "__main__":
+    main()

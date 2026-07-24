@@ -29,17 +29,41 @@ except ImportError:
 
 IST_WINDOWS = sys.platform.startswith("win")
 
-# Bei einer PyInstaller-exe liegt der Tool-Ordner neben der exe, nicht im _internal/
+# Zwei getrennte Orte, weil ein Update den Programmordner austauscht:
+#
+#   PROG_DIR   exe, ffmpeg, app/ — wird bei Updates überschrieben, nichts von Wert darin
+#   DATEN_DIR  Fotos, Logo, Einstellungen — bleibt bei Updates unangetastet
+#
+# Bei einer PyInstaller-exe liegt der Programmordner neben der exe, nicht im _internal/;
+# die Nutzdaten stehen dann in „Dokumente/Wasserzeichen", wo der Nutzer sie auch findet.
+# Im Entwicklerbetrieb (Skript direkt gestartet) bleibt beides zusammen wie bisher.
 if getattr(sys, "frozen", False):
-    HERE = os.path.dirname(os.path.abspath(sys.executable))
+    PROG_DIR = os.path.dirname(os.path.abspath(sys.executable))
+    DATEN_DIR = os.path.join(os.path.expanduser("~"), "Documents", "Wasserzeichen")
+    os.makedirs(DATEN_DIR, exist_ok=True)
 else:
-    HERE = os.path.dirname(os.path.abspath(__file__))
-WZ_PATH = os.path.join(HERE, "wasserzeichen.png")
-EINST_PATH = os.path.join(HERE, "einstellungen.json")
-BESCHR_PATH = os.path.join(HERE, "beschriftung.json")
-IN_DIR = os.path.join(HERE, "input")
+    PROG_DIR = os.path.dirname(os.path.abspath(__file__))
+    DATEN_DIR = PROG_DIR
+
+
+def _version_lesen():
+    """Versionsnummer aus version.txt neben diesem Modul — eine Quelle für alle."""
+    pfad = os.path.join(os.path.dirname(os.path.abspath(__file__)), "version.txt")
+    try:
+        with open(pfad, encoding="utf-8") as f:
+            return f.read().strip() or "0.0.0"
+    except OSError:
+        return "0.0.0"
+
+
+VERSION = _version_lesen()
+
+WZ_PATH = os.path.join(DATEN_DIR, "wasserzeichen.png")
+EINST_PATH = os.path.join(DATEN_DIR, "einstellungen.json")
+BESCHR_PATH = os.path.join(DATEN_DIR, "beschriftung.json")
+IN_DIR = os.path.join(DATEN_DIR, "input")
 DONE_DIR = os.path.join(IN_DIR, "erledigt")
-OUT_DIR = os.path.join(HERE, "output")
+OUT_DIR = os.path.join(DATEN_DIR, "output")
 LAUF_MUSTER = re.compile(r"^\d{2}\.\d{2}\.\d{4} \d{2}-\d{2} Uhr")  # 24.07.2026 15-12 Uhr
 
 FOTO_ENDUNGEN = {".jpg", ".jpeg", ".png", ".heic", ".webp", ".tif", ".tiff"}
@@ -182,7 +206,7 @@ def _zielordner(lauf, art):
 
 def _werkzeug(name):
     """ffmpeg/ffprobe finden: erst neben dem Tool (Windows-Übergabe), dann im System-PATH."""
-    lokal = os.path.join(HERE, name + (".exe" if IST_WINDOWS else ""))
+    lokal = os.path.join(PROG_DIR, name + (".exe" if IST_WINDOWS else ""))
     if os.path.isfile(lokal):
         return lokal
     gefunden = shutil.which(name)
@@ -202,7 +226,7 @@ def _raw_oeffnen(pfad):
             raise WerkstattFehler("Für RAW-Dateien fehlt das Modul 'rawpy'.")
         with rawpy.imread(pfad) as raw:
             return Image.fromarray(raw.postprocess())
-    tmp = os.path.join(HERE, ".raw_tmp.jpg")
+    tmp = os.path.join(DATEN_DIR, ".raw_tmp.jpg")
     subprocess.run(["sips", "-s", "format", "jpeg", "-s", "formatOptions", "95",
                     pfad, "--out", tmp], check=True, capture_output=True)
     img = Image.open(tmp)
@@ -254,7 +278,7 @@ def _logo_skaliert(bild_breite, einst):
     """Logo auf Zielbreite bringen und die Deckkraft aus den Einstellungen anlegen."""
     if not os.path.isfile(WZ_PATH):
         raise WerkstattFehler(
-            f"Das Logo fehlt: {WZ_PATH}\nBitte wasserzeichen.png in den Programmordner legen.")
+            f"Das Logo fehlt: {WZ_PATH}\nBitte wasserzeichen.png in diesen Ordner legen.")
     wz = Image.open(WZ_PATH).convert("RGBA")
     ziel_b = max(1, int(bild_breite * einst["breite_prozent"] / 100))
     ziel_h = max(1, int(wz.height * ziel_b / wz.width))
@@ -325,7 +349,7 @@ def video_stempeln(pfad, einst=None, lauf=None):
     deckel = 40_000_000 if breite >= 3000 else 14_000_000  # 4K braucht mehr Luft
     ziel_bps = min(deckel, max(2_000_000, int(original_bps * 1.5)))
     wz = _logo_skaliert(breite, einst)
-    wz_tmp = os.path.join(HERE, ".wz_video_tmp.png")
+    wz_tmp = os.path.join(DATEN_DIR, ".wz_video_tmp.png")
     wz.save(wz_tmp)
     ziel = os.path.join(ordner, os.path.splitext(os.path.basename(pfad))[0] + "_wz.mp4")
     cmd = [_werkzeug("ffmpeg"), "-y", "-hide_banner", "-loglevel", "warning",
