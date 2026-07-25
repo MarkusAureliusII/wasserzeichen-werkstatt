@@ -66,9 +66,11 @@ VERSION = _version_lesen()
 
 WZ_PATH = os.path.join(DATEN_DIR, "wasserzeichen.png")
 EINST_PATH = os.path.join(DATEN_DIR, "einstellungen.json")
+STANDARD_PATH = os.path.join(DATEN_DIR, "standard.json")
 BESCHR_PATH = os.path.join(DATEN_DIR, "beschriftung.json")
 IN_DIR = os.path.join(DATEN_DIR, "input")
 DONE_DIR = os.path.join(IN_DIR, "erledigt")
+ENTF_DIR = os.path.join(IN_DIR, "entfernt")
 OUT_DIR = os.path.join(DATEN_DIR, "output")
 LAUF_MUSTER = re.compile(r"^\d{2}\.\d{2}\.\d{4} \d{2}-\d{2} Uhr")  # 24.07.2026 15-12 Uhr
 
@@ -79,6 +81,8 @@ VIDEO_ENDUNGEN = {".mp4", ".mov", ".m4v", ".avi", ".mkv", ".mts", ".m2ts",  # So
 
 ECKEN = ["oben-links", "oben-rechts", "unten-links", "unten-rechts"]
 
+# Die eingebauten Ausgangswerte. Wer eigene festlegt, überschreibt sie nicht,
+# sondern legt sie in standard.json daneben — so lässt sich immer zurück.
 STANDARD = {
     "ecke": "unten-rechts",
     "breite_prozent": 24.0,     # Logobreite relativ zur Bildbreite
@@ -123,15 +127,17 @@ def _klartext(e):
 
 # ---------------------------------------------------------------- Einstellungen
 
-def einstellungen_laden():
-    """Gespeicherte Werte lesen; unbekannte/kaputte Angaben fallen auf Standard zurück."""
-    werte = dict(STANDARD)
+def _werte_lesen(pfad, vorgabe):
+    """Werte aus einer Datei lesen; Unbekanntes und Kaputtes fällt auf die Vorgabe zurück."""
+    werte = dict(vorgabe)
     try:
-        with open(EINST_PATH, encoding="utf-8") as f:
+        with open(pfad, encoding="utf-8") as f:
             gespeichert = json.load(f)
     except (OSError, ValueError):
         return werte
-    for schluessel, standard in STANDARD.items():
+    if not isinstance(gespeichert, dict):
+        return werte
+    for schluessel, standard in vorgabe.items():
         wert = gespeichert.get(schluessel, standard)
         if schluessel == "ecke":
             werte[schluessel] = wert if wert in ECKEN else standard
@@ -143,9 +149,32 @@ def einstellungen_laden():
     return werte
 
 
-def einstellungen_speichern(werte):
-    with open(EINST_PATH, "w", encoding="utf-8") as f:
+def _werte_schreiben(pfad, werte):
+    with open(pfad, "w", encoding="utf-8") as f:
         json.dump(werte, f, indent=2, ensure_ascii=False)
+
+
+def standard_laden():
+    """Die Werte, auf die „Auf Standard zurücksetzen“ zurückgeht.
+
+    Selbst festgelegte, sonst die eingebauten. Wer immer mit demselben Logo
+    arbeitet, stellt sich das einmal ein und kommt danach jederzeit dorthin
+    zurück, ohne die Zahlen im Kopf zu haben.
+    """
+    return _werte_lesen(STANDARD_PATH, STANDARD)
+
+
+def standard_speichern(werte):
+    _werte_schreiben(STANDARD_PATH, werte)
+
+
+def einstellungen_laden():
+    """Zuletzt benutzte Werte; ohne solche der eigene Standard."""
+    return _werte_lesen(EINST_PATH, standard_laden())
+
+
+def einstellungen_speichern(werte):
+    _werte_schreiben(EINST_PATH, werte)
 
 
 def beschriftung_laden():
@@ -511,6 +540,41 @@ def input_dateien():
         else:
             rest.append(f)
     return fotos, videos, rest
+
+
+def _freier_pfad(ordner, name):
+    """Zielpfad, der noch nicht belegt ist — „Foto.jpg“, sonst „Foto (2).jpg“."""
+    rumpf, endung = os.path.splitext(name)
+    pfad = os.path.join(ordner, name)
+    zaehler = 2
+    while os.path.exists(pfad):
+        pfad = os.path.join(ordner, f"{rumpf} ({zaehler}){endung}")
+        zaehler += 1
+    return pfad
+
+
+def aus_auswahl_nehmen(namen):
+    """Versehentlich Gewähltes wieder aus der Warteschlange nehmen.
+
+    Beiseitegelegt statt gelöscht: Die meisten Dateien sind Kopien, aber wer den
+    Ablageordner von Hand öffnet, legt womöglich sein einziges Original hinein.
+    Ein Fehlgriff wäre dann endgültig. Sie landen deshalb in input/entfernt und
+    lassen sich von dort zurückholen.
+
+    Rückgabe: (Anzahl, Liste von (Name, Grund) für alles, was nicht ging).
+    """
+    os.makedirs(ENTF_DIR, exist_ok=True)
+    genommen, fehler = 0, []
+    for name in namen:
+        quelle = os.path.join(IN_DIR, name)
+        if not os.path.isfile(quelle):
+            continue  # inzwischen schon weg — kein Grund für eine Meldung
+        try:
+            shutil.move(quelle, _freier_pfad(ENTF_DIR, name))
+            genommen += 1
+        except OSError as e:
+            fehler.append((name, _klartext(e)))
+    return genommen, fehler
 
 
 def alles_verarbeiten(einst=None, melden=print, abbruch=None):

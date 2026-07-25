@@ -12,9 +12,17 @@ SO GEHT ES
 2. Auf "Fotos und Videos wählen" klicken und alles aussuchen,
    was ein Logo bekommen soll. Mehrere auf einmal sind kein Problem.
 
+   Aus Versehen das Falsche erwischt? "Auswahl bearbeiten" zeigt alles,
+   was bereitliegt, und nimmt einzelne Dateien wieder heraus.
+
 3. In der Vorschau siehst du sofort, wie es aussehen wird.
    Falls es dir nicht gefällt: Ecke anklicken oder an den Reglern
-   für Größe, Rand und Deckkraft ziehen.
+   für Größe, Rand und Deckkraft ziehen. Die Zeichen < und > neben
+   dem Wert regeln in kleinen Schritten — praktisch am Trackpad.
+
+   Passt die Einstellung? Mit "Als Standard setzen" merkt sich das
+   Programm sie. "Auf Standard zurücksetzen" kommt jederzeit dorthin
+   zurück, egal wie sehr du zwischendurch herumgeschoben hast.
 
 4. Auf "Verarbeiten" klicken und warten. Videos dauern deutlich
    länger als Fotos — das ist normal.
@@ -38,6 +46,8 @@ sonst jedes Foto und jedes Video in die Cloud hochladen.
 
   input\            hier kannst du Dateien auch direkt hineinkopieren
   input\erledigt\   fertig verarbeitete Originale — unverändert
+  input\entfernt\   was du aus der Auswahl genommen hast — nichts davon
+                    ist gelöscht, du kannst es jederzeit zurückholen
   output\           die Ergebnisse, sortiert nach Datum und Uhrzeit
   wasserzeichen.png dein Logo
 

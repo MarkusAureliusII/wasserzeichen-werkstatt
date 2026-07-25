@@ -108,12 +108,86 @@ def _vorhandenes_fenster_holen(titel):
         return
     try:
         import ctypes
-        fenster = ctypes.windll.user32.FindWindowW(None, titel)
+        benutzer = ctypes.windll.user32
+        benutzer.FindWindowW.restype = ctypes.c_void_p
+        benutzer.FindWindowW.argtypes = [ctypes.c_wchar_p, ctypes.c_wchar_p]
+        fenster = benutzer.FindWindowW(None, titel)
         if fenster:
-            ctypes.windll.user32.ShowWindow(fenster, 9)   # SW_RESTORE
-            ctypes.windll.user32.SetForegroundWindow(fenster)
+            benutzer.ShowWindow(ctypes.c_void_p(fenster), 9)   # SW_RESTORE
+            benutzer.SetForegroundWindow(ctypes.c_void_p(fenster))
     except Exception:
         pass
+
+
+def _arbeitsbereich(fenster):
+    """Die freie Fläche des Bildschirms als (x, y, breite, höhe) — oder None.
+
+    „Frei“ heißt: ohne Taskleiste, und zwar egal, wo sie steht. Windows gibt
+    dafür ein fertiges Rechteck heraus, statt bloß einer Höhe — eine Leiste am
+    linken Rand verschiebt eben den Anfang und nicht das Ende. Ausgeblendete
+    Leisten sind darin ebenfalls schon berücksichtigt.
+
+    Gefragt wird nach dem Bildschirm, auf dem das Fenster gerade steht: Bei zwei
+    Monitoren hat jeder seine eigene Leiste. Klappt das nicht, tut es ersatzweise
+    der Hauptbildschirm.
+
+    Die Maße kommen in derselben Rechnung zurück, in der auch das Fenster misst:
+    Windows rechnet für ein Programm, das nichts von vergrößerter Darstellung
+    weiß, sämtliche Koordinaten um — beide Seiten also gleichermaßen.
+    """
+    if not w.IST_WINDOWS:
+        return None
+    try:
+        import ctypes
+
+        # Feldbreiten ausdrücklich: Windows rechnet hier immer mit 32 Bit,
+        # während c_long anderswo acht Byte breit wäre.
+        class Rechteck(ctypes.Structure):
+            _fields_ = [("links", ctypes.c_int32), ("oben", ctypes.c_int32),
+                        ("rechts", ctypes.c_int32), ("unten", ctypes.c_int32)]
+
+        class Bildschirm(ctypes.Structure):
+            _fields_ = [("groesse", ctypes.c_uint32), ("ganz", Rechteck),
+                        ("frei", Rechteck), ("art", ctypes.c_uint32)]
+
+        benutzer = ctypes.windll.user32
+        # Fenster- und Bildschirmkennungen sind unter 64-Bit-Windows acht Byte
+        # groß. Ohne diese Angaben nimmt ctypes vier an und schneidet sie ab.
+        benutzer.GetParent.restype = ctypes.c_void_p
+        benutzer.GetParent.argtypes = [ctypes.c_void_p]
+        benutzer.MonitorFromWindow.restype = ctypes.c_void_p
+        benutzer.MonitorFromWindow.argtypes = [ctypes.c_void_p, ctypes.c_ulong]
+        benutzer.GetMonitorInfoW.argtypes = [ctypes.c_void_p, ctypes.c_void_p]
+        frei = None
+
+        # Der Bildschirm unter diesem Fenster. Tk hängt sein Fenster mitunter in
+        # einen Rahmen — darum bis zum obersten Vorfahren hochgehen.
+        griff = ctypes.c_void_p(fenster.winfo_id())
+        while True:
+            darueber = benutzer.GetParent(griff)
+            if not darueber:
+                break
+            griff = ctypes.c_void_p(darueber)
+        schirm = benutzer.MonitorFromWindow(griff, 2)   # 2 = der nächstgelegene
+        if schirm:
+            angaben = Bildschirm()
+            angaben.groesse = ctypes.sizeof(Bildschirm)
+            if benutzer.GetMonitorInfoW(ctypes.c_void_p(schirm), ctypes.byref(angaben)):
+                frei = angaben.frei
+
+        if frei is None:
+            # SPI_GETWORKAREA — dasselbe für den Hauptbildschirm
+            r = Rechteck()
+            if not benutzer.SystemParametersInfoW(0x0030, 0, ctypes.byref(r), 0):
+                return None
+            frei = r
+
+        breite, hoehe = frei.rechts - frei.links, frei.unten - frei.oben
+        if breite < 400 or hoehe < 300:
+            return None            # unplausibel — dann lieber der übliche Weg
+        return frei.links, frei.oben, breite, hoehe
+    except Exception:
+        return None
 
 
 def _musterbild():
@@ -128,10 +202,114 @@ def _musterbild():
     return bild
 
 
+class AuswahlFenster(tk.Toplevel):
+    """Zeigt, was bereitliegt, und nimmt Falsches wieder heraus.
+
+    Ein eigenes Fenster, weil die Liste im Hauptfenster Platz bräuchte, den es
+    dort nicht gibt — gebraucht wird sie ohnehin nur, wenn etwas schiefging.
+    """
+
+    def __init__(self, eltern, nach_aenderung):
+        super().__init__(eltern, bg=FARBE["grund"])
+        self.nach_aenderung = nach_aenderung
+        self.title("Auswahl bearbeiten")
+        self.transient(eltern)
+        self.minsize(460, 380)
+
+        rahmen = tk.Frame(self, bg=FARBE["grund"])
+        rahmen.pack(fill="both", expand=True, padx=22, pady=20)
+        rahmen.rowconfigure(1, weight=1)
+        rahmen.columnconfigure(0, weight=1)
+
+        self.kopf = Titel(rahmen, "Bereitliegende Dateien", bg=FARBE["grund"])
+        self.kopf.grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        self.liste = tk.Listbox(rahmen, selectmode="extended", font=mono(10),
+                                bg=FARBE["feld"], fg=FARBE["text"],
+                                selectbackground=FARBE["akzent"],
+                                selectforeground=FARBE["invers"],
+                                relief="flat", highlightthickness=1,
+                                highlightbackground=FARBE["linie"],
+                                activestyle="none", borderwidth=0)
+        self.liste.grid(row=1, column=0, sticky="nsew")
+
+        tk.Label(rahmen, text="Mehrere auf einmal: mit gedrückter Umschalt- oder Strg-Taste.",
+                 font=mono(9), fg=FARBE["text_still"], bg=FARBE["grund"], anchor="w").grid(
+            row=2, column=0, sticky="w", pady=(10, 14))
+
+        knoepfe = tk.Frame(rahmen, bg=FARBE["grund"])
+        knoepfe.grid(row=3, column=0, sticky="ew")
+        self.knopf_weg = Knopf(knoepfe, "Ausgewählte entfernen", self._gewaehlte_weg,
+                               breite=210, hintergrund=FARBE["grund"])
+        self.knopf_weg.pack(side="left")
+        self.knopf_alle = Knopf(knoepfe, "Alle entfernen", self._alle_weg,
+                                breite=150, hintergrund=FARBE["grund"])
+        self.knopf_alle.pack(side="left", padx=(10, 0))
+        Knopf(knoepfe, "Fertig", self.destroy, stil="primaer", breite=110,
+              hintergrund=FARBE["grund"]).pack(side="right")
+
+        self._fuellen()
+        self.liste.bind("<<ListboxSelect>>", lambda _: self._knoepfe_richten())
+        self.bind("<Escape>", lambda _: self.destroy())
+        self._mittig_setzen(eltern)
+        self.grab_set()          # solange dieses Fenster offen ist, gilt es allein
+        self.liste.focus_set()
+
+    def _mittig_setzen(self, eltern):
+        self.update_idletasks()
+        b, h = max(self.winfo_reqwidth(), 460), max(self.winfo_reqheight(), 380)
+        x = eltern.winfo_rootx() + (eltern.winfo_width() - b) // 2
+        y = eltern.winfo_rooty() + (eltern.winfo_height() - h) // 3
+        self.geometry(f"{b}x{h}+{max(0, x)}+{max(0, y)}")
+
+    def _fuellen(self):
+        fotos, videos, rest = w.input_dateien()
+        self.namen = fotos + videos + rest
+        self.liste.delete(0, "end")
+        for name in self.namen:
+            self.liste.insert("end", f"  {name}")
+        anzahl = len(self.namen)
+        self.kopf.configure(text=gesperrt(
+            "NICHTS BEREIT" if not anzahl else
+            "1 DATEI BEREIT" if anzahl == 1 else f"{anzahl} DATEIEN BEREIT"))
+        self._knoepfe_richten()
+
+    def _knoepfe_richten(self):
+        self.knopf_weg.freigeben(bool(self.liste.curselection()))
+        self.knopf_alle.freigeben(bool(self.namen))
+
+    def _gewaehlte_weg(self):
+        self._wegnehmen([self.namen[i] for i in self.liste.curselection()])
+
+    def _alle_weg(self):
+        self._wegnehmen(list(self.namen))
+
+    def _wegnehmen(self, namen):
+        if not namen:
+            return
+        was = namen[0] if len(namen) == 1 else f"{len(namen)} Dateien"
+        if not messagebox.askokcancel(
+                "Aus der Auswahl nehmen",
+                f"{was} aus der Auswahl nehmen?\n\n"
+                "Nichts wird gelöscht: Die Dateien wandern in den Ordner "
+                "„entfernt“ innerhalb des Ablageordners und lassen sich von "
+                "dort zurückholen.", parent=self):
+            return
+        genommen, fehler = w.aus_auswahl_nehmen(namen)
+        self._fuellen()
+        self.nach_aenderung(genommen)
+        if fehler:
+            liste = "\n".join(f"• {name}: {grund}" for name, grund in fehler[:8])
+            messagebox.showwarning("Nicht alles ging",
+                                   f"{len(fehler)} Datei(en) blieben liegen:\n\n{liste}",
+                                   parent=self)
+
+
 class Fenster(tk.Tk):
     def __init__(self):
         super().__init__()
         self.beschr = w.beschriftung_laden()
+        self.standard = w.standard_laden()
         self.title(self.beschr["fenstertitel"])
         self.configure(bg=FARBE["grund"])
         # Nie mehr verlangen, als der Bildschirm hergibt: Ein Mindestmaß, das
@@ -173,13 +351,23 @@ class Fenster(tk.Tk):
             self.after(1500, self._update_pruefen)
 
     def _gross_aufziehen(self):
-        """Beim Start gleich den ganzen Bildschirm nutzen.
+        """Beim Start die ganze freie Bildschirmfläche nutzen.
 
-        „zoomed“ ist der maximierte Zustand — kein Vollbild: Titelleiste und
-        Taskleiste bleiben sichtbar, das Fenster lässt sich normal wieder
-        verkleinern. Unter macOS kennt Tk den Zustand nicht, dort wird die
-        Bildschirmfläche von Hand gesetzt.
+        Kein Vollbild: Titelleiste und Taskleiste bleiben sichtbar, das Fenster
+        lässt sich normal verkleinern.
+
+        Unter Windows wird die Fläche selbst gesetzt statt über den maximierten
+        Zustand „zoomed“. Denn auf einem Rechner mit vergrößerter Darstellung
+        rechnet Windows die Maße für ein Programm, das davon nichts weiß, ungenau
+        um: Das Fenster reicht dann ein Stück unter die Taskleiste, und die
+        unterste Zeile — bisher der Knopf für die Update-Suche — ist nicht mehr
+        erreichbar. Unter macOS kennt Tk „zoomed“ und macht es richtig.
         """
+        bereich = _arbeitsbereich(self)
+        if bereich:
+            x, y, breite, hoehe = bereich
+            self.geometry(f"{breite}x{hoehe}+{x}+{y}")
+            return
         try:
             self.state("zoomed")
             return
@@ -256,9 +444,20 @@ class Fenster(tk.Tk):
                      font=mono(10), fg=FARBE["text_leise"], bg=FARBE["grund"]).pack(
                 anchor="w", pady=(6, 0))
 
+        # Rechte Kopfecke: Marke, darunter Version und Update-Suche. Die standen
+        # früher ganz unten im Fenster — also genau dort, wo als Erstes etwas
+        # verschwindet, wenn der Platz knapp wird.
+        rechts = tk.Frame(kopf, bg=FARBE["grund"])
+        rechts.grid(row=0, column=2, sticky="ne")
         if self.beschr["marke"]:
-            tk.Label(kopf, text=self.beschr["marke"], font=mono(9),
-                     fg=FARBE["text_still"], bg=FARBE["grund"]).grid(row=0, column=2, sticky="e")
+            tk.Label(rechts, text=self.beschr["marke"], font=mono(9),
+                     fg=FARBE["text_still"], bg=FARBE["grund"]).pack(anchor="e")
+        zeile = tk.Frame(rechts, bg=FARBE["grund"])
+        zeile.pack(anchor="e", pady=(8, 0))
+        tk.Label(zeile, text=f"Version {w.VERSION}", font=mono(9),
+                 fg=FARBE["text_still"], bg=FARBE["grund"]).pack(side="left", padx=(0, 12))
+        Knopf(zeile, "Nach Updates suchen", lambda: self._update_pruefen(von_hand=True),
+              breite=190, hoehe=26, hintergrund=FARBE["grund"]).pack(side="left")
 
         # Zweite Zeile im Kopf: bleibt leer, bis es etwas zu melden gibt.
         self.streifen = tk.Frame(kopf, bg=FARBE["karte"],
@@ -304,7 +503,14 @@ class Fenster(tk.Tk):
         links.grid(row=0, column=0, sticky="nsew")
         links.rowconfigure(1, weight=1)
         links.columnconfigure(0, weight=1)
-        Titel(links, "Vorschau").grid(row=0, column=0, sticky="w", padx=20, pady=(14, 8))
+        # Kopfzeile der Vorschau: Der Knopf gehört hierher und nicht zu den
+        # Einstellungen — er ändert nur, woran man sie ausprobiert.
+        vorschau_kopf = tk.Frame(links, bg=FARBE["karte"])
+        vorschau_kopf.grid(row=0, column=0, sticky="ew", padx=20, pady=(12, 8))
+        vorschau_kopf.columnconfigure(0, weight=1)
+        Titel(vorschau_kopf, "Vorschau").grid(row=0, column=0, sticky="w")
+        Knopf(vorschau_kopf, "Anderes Bild", self._vorschaubild_waehlen,
+              breite=150, hoehe=30).grid(row=0, column=1, sticky="e")
         self.leinwand = tk.Canvas(links, width=VORSCHAU_B, height=VORSCHAU_H,
                                   bg=FARBE["feld"], highlightthickness=0)
         self.leinwand.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 16))
@@ -335,10 +541,11 @@ class Fenster(tk.Tk):
         tk.Frame(innen, bg=FARBE["linie"], height=1).pack(fill="x", pady=(0, 14))
         knoepfe = tk.Frame(innen, bg=FARBE["karte"])
         knoepfe.pack(fill="x")
-        Knopf(knoepfe, "Anderes Bild", self._vorschaubild_waehlen,
-              breite=150).pack(side="left")
-        Knopf(knoepfe, "Zurücksetzen", self._zuruecksetzen,
-              breite=150).pack(side="left", padx=(10, 0))
+        self.knopf_standard = Knopf(knoepfe, "Als Standard setzen",
+                                    self._als_standard_setzen, breite=180)
+        self.knopf_standard.pack(side="left")
+        Knopf(knoepfe, "Auf Standard zurücksetzen", self._zuruecksetzen,
+              breite=220).pack(side="left", padx=(10, 0))
 
     def _fuss(self, eltern):
         fuss = tk.Frame(eltern, bg=FARBE["grund"])
@@ -354,16 +561,19 @@ class Fenster(tk.Tk):
         # Zeile 1 — Dateien
         zeile1 = tk.Frame(innen, bg=FARBE["karte"])
         zeile1.grid(row=0, column=0, columnspan=3, sticky="ew")
-        zeile1.columnconfigure(2, weight=1)
-        Titel(zeile1, "Dateien").grid(row=0, column=0, columnspan=3, sticky="w",
+        zeile1.columnconfigure(3, weight=1)
+        Titel(zeile1, "Dateien").grid(row=0, column=0, columnspan=4, sticky="w",
                                       pady=(0, 10))
         Knopf(zeile1, "Fotos und Videos wählen", self._dateien_waehlen,
               breite=240).grid(row=1, column=0)
+        self.knopf_auswahl = Knopf(zeile1, "Auswahl bearbeiten", self._auswahl_bearbeiten,
+                                   breite=190)
+        self.knopf_auswahl.grid(row=1, column=1, padx=10)
         Knopf(zeile1, "Ordner öffnen", self._input_oeffnen,
-              breite=150).grid(row=1, column=1, padx=10)
+              breite=150).grid(row=1, column=2)
         self.lbl_input = tk.Label(zeile1, font=mono(10), fg=FARBE["text_leise"],
                                   bg=FARBE["karte"], anchor="e")
-        self.lbl_input.grid(row=1, column=2, sticky="e")
+        self.lbl_input.grid(row=1, column=3, sticky="e")
 
         tk.Frame(innen, bg=FARBE["linie"], height=1).grid(
             row=1, column=0, columnspan=3, sticky="ew", pady=14)
@@ -399,17 +609,6 @@ class Fenster(tk.Tk):
         self.protokoll.tag_configure("hell", foreground=FARBE["text"])
         self.protokoll.tag_configure("fehler", foreground=FARBE["warnung"])
 
-        # Fußzeile: Version und die Möglichkeit, selbst nachzusehen — falls beim
-        # Start kein Netz da war.
-        fusszeile = tk.Frame(innen, bg=FARBE["karte"])
-        fusszeile.grid(row=4, column=0, columnspan=3, sticky="ew", pady=(12, 0))
-        fusszeile.columnconfigure(0, weight=1)
-        tk.Label(fusszeile, text=f"Version {w.VERSION}", font=mono(9),
-                 fg=FARBE["text_still"], bg=FARBE["karte"], anchor="w").grid(
-            row=0, column=0, sticky="w")
-        Knopf(fusszeile, "Nach Updates suchen", lambda: self._update_pruefen(von_hand=True),
-              breite=190, hoehe=28).grid(row=0, column=1, sticky="e")
-
     # ------------------------------------------------------------ Einstellungen
 
     def _aktuelle_einstellungen(self):
@@ -429,11 +628,26 @@ class Fenster(tk.Tk):
         self._nachzeichnen_job = self.after(50, self._zeichne_vorschau)
 
     def _zuruecksetzen(self):
-        self.ecken.setzen(w.STANDARD["ecke"])
-        self.s_breite.setzen(w.STANDARD["breite_prozent"])
-        self.s_rand.setzen(w.STANDARD["rand_prozent"])
-        self.s_deckkraft.setzen(w.STANDARD["deckkraft_prozent"])
+        self.ecken.setzen(self.standard["ecke"])
+        self.s_breite.setzen(self.standard["breite_prozent"])
+        self.s_rand.setzen(self.standard["rand_prozent"])
+        self.s_deckkraft.setzen(self.standard["deckkraft_prozent"])
         self._geaendert()
+
+    def _als_standard_setzen(self):
+        """Die eingestellten Werte werden zum Ausgangspunkt für später."""
+        werte = self._aktuelle_einstellungen()
+        try:
+            w.standard_speichern(werte)
+        except OSError as e:
+            messagebox.showwarning("Nicht gespeichert",
+                                   f"Der Standard ließ sich nicht ablegen: {e}")
+            return
+        self.standard = werte
+        # Rückmeldung am Ort der Handlung statt in einem Fenster, das man
+        # wegklicken muss.
+        self.knopf_standard.beschriften("Gespeichert")
+        self.after(1600, lambda: self.knopf_standard.beschriften("Als Standard setzen"))
 
     # ---------------------------------------------------------------- Vorschau
 
@@ -516,6 +730,27 @@ class Fenster(tk.Tk):
         self._schreibe(f"{kopiert} Datei(en) übernommen.", "hell")
         self._nach_dateiaenderung()
 
+    def _auswahl_bearbeiten(self):
+        """Liste des Bereitliegenden öffnen — dort lässt sich Falsches herausnehmen."""
+        if self.laeuft:
+            messagebox.showinfo("Läuft gerade",
+                                "Während der Verarbeitung lässt sich die Auswahl "
+                                "nicht ändern.")
+            return
+        fotos, videos, rest = w.input_dateien()
+        if not (fotos or videos or rest):
+            messagebox.showinfo("Nichts ausgewählt",
+                                "Es liegt noch nichts bereit.\n\n"
+                                "Mit „Fotos und Videos wählen“ kommt etwas hinein.")
+            return
+        AuswahlFenster(self, self._auswahl_geaendert)
+
+    def _auswahl_geaendert(self, genommen):
+        if genommen:
+            self._schreibe(f"{genommen} Datei(en) aus der Auswahl genommen — sie liegen "
+                           "jetzt im Ordner „entfernt“.", "hell")
+        self._nach_dateiaenderung()
+
     def _nach_dateiaenderung(self):
         self._zaehle_input()
         self._vorschau_quelle_neu_laden()
@@ -530,6 +765,7 @@ class Fenster(tk.Tk):
             text += f"  ·  {len(rest)} unbekanntes Format"
         self.lbl_input.config(text=text,
                               fg=FARBE["text"] if anzahl else FARBE["text_still"])
+        self.knopf_auswahl.freigeben(bool(fotos or videos or rest))
         return anzahl
 
     # ------------------------------------------------------------ Verarbeiten
