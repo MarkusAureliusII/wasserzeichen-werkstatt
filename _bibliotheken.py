@@ -39,13 +39,25 @@ except ImportError:
     pass
 
 # --- Standardbibliothek, die PyInstaller sonst wegoptimiert
+import ctypes                     # noqa: F401  — vorhandenes Fenster nach vorn holen
 import json                       # noqa: F401
 import queue                      # noqa: F401
 import re                         # noqa: F401
 import shutil                     # noqa: F401
 import subprocess                 # noqa: F401
 import threading                  # noqa: F401
+import time                       # noqa: F401
 import zoneinfo                   # noqa: F401  — deutsche Ortszeit für Lauf-Ordner
+
+# Dateisperre gegen ein zweites Fenster — je nach System das eine oder andere.
+try:
+    import msvcrt                 # noqa: F401  — nur unter Windows
+except ImportError:
+    pass
+try:
+    import fcntl                  # noqa: F401  — nur unter macOS und Linux
+except ImportError:
+    pass
 
 # --- Auf Vorrat: Netzzugriff für Update-Prüfung und spätere Schnittstellen
 import http.client                # noqa: F401

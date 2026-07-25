@@ -10,7 +10,7 @@ Hier liegt nur der Ablauf: Dateien hinzufügen, Aussehen einstellen, verarbeiten
 Die Aufschriften im Kopf kommen aus beschriftung.json (siehe wasserzeichen.py);
 fehlt die Datei, zeigt das Fenster neutrale Standardtexte.
 """
-import os, queue, shutil, subprocess, sys, threading
+import os, queue, shutil, subprocess, sys, threading, time
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -20,10 +20,13 @@ import webbrowser
 
 import aktualisierung as akt
 import wasserzeichen as w
-from gestaltung import (FARBE, EckenWahl, Fortschritt, Karte, Knopf, Schieber, Titel,
-                        gesperrt, mono)
+from gestaltung import (FARBE, Buehne, EckenWahl, Fortschritt, Karte, Knopf, Schieber,
+                        Titel, gesperrt, mono)
 
-VORSCHAU_B, VORSCHAU_H = 660, 440
+# Mindestmaße der Vorschau. Bewusst klein gehalten: Die Leinwand wächst mit dem
+# Fenster, aber sie bestimmt, wie viel Höhe das Fenster überhaupt anfordert — und
+# auf einem Windows-Rechner mit vergrößerter Darstellung ist davon wenig übrig.
+VORSCHAU_B, VORSCHAU_H = 520, 260
 
 
 def _ordner_oeffnen(pfad):
@@ -32,6 +35,85 @@ def _ordner_oeffnen(pfad):
         os.startfile(pfad)  # noqa: S606 — Windows-eigener Öffnen-Aufruf
     else:
         subprocess.run(["open", pfad])
+
+
+# --------------------------------------------------------------- Nur ein Fenster
+
+# Die offene Sperrdatei. Muss als Modulvariable liegen bleiben: Sobald Python sie
+# schließt, gibt das Betriebssystem die Sperre wieder frei.
+_sperre = None
+
+
+def _sperre_holen(wartesekunden=3.0):
+    """Dafür sorgen, dass immer nur ein Fenster läuft.
+
+    Zwei Fenster entstanden auf zwei Wegen: beim Neustart nach einem Update
+    (der neue Vorgang startet, während der alte noch aufräumt) und beim zweiten
+    Doppelklick, weil das Laden der mitgelieferten Laufzeit ein paar Sekunden
+    dauert, in denen nichts zu sehen ist und man deshalb noch einmal klickt.
+
+    Die Sperre ist eine Datei im Datenordner, die der laufende Vorgang offen
+    hält. Stürzt das Programm ab, gibt das Betriebssystem sie von allein frei —
+    anders als bei einer Datei mit der Vorgangsnummer, die liegen bleiben und
+    den nächsten Start blockieren würde.
+
+    Kurz gewartet wird, weil der abgelöste Vorgang beim Update noch ein paar
+    Augenblicke braucht, bis er wirklich weg ist.
+    """
+    global _sperre
+    pfad = os.path.join(w.DATEN_DIR, ".laeuft")
+    ende = time.monotonic() + wartesekunden
+    while True:
+        datei = None
+        try:
+            datei = open(pfad, "a+")
+            datei.seek(0)
+            if w.IST_WINDOWS:
+                import msvcrt
+                msvcrt.locking(datei.fileno(), msvcrt.LK_NBLCK, 1)
+            else:
+                import fcntl
+                fcntl.flock(datei.fileno(), fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except OSError:
+            if datei is not None:
+                datei.close()
+            if time.monotonic() >= ende:
+                return False
+            time.sleep(0.25)
+            continue
+        except Exception:
+            # Sperren nicht möglich (etwa auf einem Netzlaufwerk): dann lieber
+            # starten als gar nicht starten.
+            if datei is not None:
+                datei.close()
+            return True
+        _sperre = datei
+        return True
+
+
+def _sperre_loesen():
+    """Vor dem Neustart freigeben, damit der Nachfolger sofort weiterkann."""
+    global _sperre
+    if _sperre is not None:
+        try:
+            _sperre.close()
+        except Exception:
+            pass
+        _sperre = None
+
+
+def _vorhandenes_fenster_holen(titel):
+    """Statt eines zweiten Fensters das bereits offene nach vorn holen."""
+    if not w.IST_WINDOWS:
+        return
+    try:
+        import ctypes
+        fenster = ctypes.windll.user32.FindWindowW(None, titel)
+        if fenster:
+            ctypes.windll.user32.ShowWindow(fenster, 9)   # SW_RESTORE
+            ctypes.windll.user32.SetForegroundWindow(fenster)
+    except Exception:
+        pass
 
 
 def _musterbild():
@@ -52,7 +134,11 @@ class Fenster(tk.Tk):
         self.beschr = w.beschriftung_laden()
         self.title(self.beschr["fenstertitel"])
         self.configure(bg=FARBE["grund"])
-        self.minsize(1080, 860)
+        # Nie mehr verlangen, als der Bildschirm hergibt: Ein Mindestmaß, das
+        # nicht daraufpasst, hätte nur zur Folge, dass unten etwas abgeschnitten
+        # wird, ohne dass man das Fenster kleiner ziehen könnte.
+        self.minsize(min(940, self.winfo_screenwidth() - 40),
+                     min(600, self.winfo_screenheight() - 80))
         self.einst = w.einstellungen_laden()
         self.meldungen = queue.Queue()
         self.update_meldungen = queue.Queue()
@@ -68,6 +154,7 @@ class Fenster(tk.Tk):
         self._nachzeichnen_job = None
 
         self._baue()
+        self._gross_aufziehen()
         self._vorschau_quelle_neu_laden()
         self._zeichne_vorschau()
         self._zaehle_input()
@@ -84,6 +171,23 @@ class Fenster(tk.Tk):
         else:
             # Etwas verzögert, damit das Fenster zuerst steht.
             self.after(1500, self._update_pruefen)
+
+    def _gross_aufziehen(self):
+        """Beim Start gleich den ganzen Bildschirm nutzen.
+
+        „zoomed“ ist der maximierte Zustand — kein Vollbild: Titelleiste und
+        Taskleiste bleiben sichtbar, das Fenster lässt sich normal wieder
+        verkleinern. Unter macOS kennt Tk den Zustand nicht, dort wird die
+        Bildschirmfläche von Hand gesetzt.
+        """
+        try:
+            self.state("zoomed")
+            return
+        except tk.TclError:
+            pass
+        b = self.winfo_screenwidth()
+        h = self.winfo_screenheight()
+        self.geometry(f"{b - 40}x{h - 120}+20+40")
 
     def _nach_vorn(self):
         """Das Fenster beim Start wirklich nach vorn holen.
@@ -124,15 +228,23 @@ class Fenster(tk.Tk):
 
     def _baue(self):
         self.columnconfigure(0, weight=1)
-        self.rowconfigure(1, weight=1)
+        self.rowconfigure(0, weight=1)
 
-        self._kopf()
-        self._mitte()
-        self._fuss()
+        # Alles steht auf der Bühne: Passt der Inhalt nicht mehr in die Höhe,
+        # erscheint ein Balken, statt dass unten etwas verschwindet.
+        self.buehne = Buehne(self)
+        self.buehne.grid(row=0, column=0, sticky="nsew")
+        rumpf = self.buehne.inhalt
+        rumpf.columnconfigure(0, weight=1)
+        rumpf.rowconfigure(1, weight=1)
 
-    def _kopf(self):
-        kopf = tk.Frame(self, bg=FARBE["grund"])
-        kopf.grid(row=0, column=0, sticky="ew", padx=28, pady=(26, 18))
+        self._kopf(rumpf)
+        self._mitte(rumpf)
+        self._fuss(rumpf)
+
+    def _kopf(self, eltern):
+        kopf = tk.Frame(eltern, bg=FARBE["grund"])
+        kopf.grid(row=0, column=0, sticky="ew", padx=28, pady=(20, 14))
         kopf.columnconfigure(1, weight=1)
 
         links = tk.Frame(kopf, bg=FARBE["grund"])
@@ -177,8 +289,8 @@ class Fenster(tk.Tk):
             self.streifen.grid_remove()
             self._streifen_sichtbar = False
 
-    def _mitte(self):
-        mitte = tk.Frame(self, bg=FARBE["grund"])
+    def _mitte(self, eltern):
+        mitte = tk.Frame(eltern, bg=FARBE["grund"])
         mitte.grid(row=1, column=0, sticky="nsew", padx=28)
         # Beide Spalten wachsen mit, die Vorschau aber viermal so stark: sie
         # profitiert am meisten von Platz, die Einstellungen sollen nur nicht
@@ -192,49 +304,51 @@ class Fenster(tk.Tk):
         links.grid(row=0, column=0, sticky="nsew")
         links.rowconfigure(1, weight=1)
         links.columnconfigure(0, weight=1)
-        Titel(links, "Vorschau").grid(row=0, column=0, sticky="w", padx=20, pady=(16, 10))
+        Titel(links, "Vorschau").grid(row=0, column=0, sticky="w", padx=20, pady=(14, 8))
         self.leinwand = tk.Canvas(links, width=VORSCHAU_B, height=VORSCHAU_H,
                                   bg=FARBE["feld"], highlightthickness=0)
-        self.leinwand.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 20))
+        self.leinwand.grid(row=1, column=0, sticky="nsew", padx=20, pady=(0, 16))
         self.leinwand.bind("<Configure>", lambda _: self._geaendert())
 
         # --- Einstellungen
         rechts = Karte(mitte)
         rechts.grid(row=0, column=1, sticky="nsew", padx=(18, 0))
         innen = tk.Frame(rechts, bg=FARBE["karte"])
-        innen.pack(fill="both", expand=True, padx=22, pady=20)
+        innen.pack(fill="both", expand=True, padx=20, pady=16)
 
-        Titel(innen, "Position des Logos").pack(anchor="w", pady=(0, 12))
+        Titel(innen, "Position des Logos").pack(anchor="w", pady=(0, 10))
         self.ecken = EckenWahl(innen, self.einst["ecke"],
                                bei_aenderung=lambda _: self._geaendert())
-        self.ecken.pack(fill="x", pady=(0, 14))
+        self.ecken.pack(fill="x", pady=(0, 12))
 
         self.s_breite = Schieber(innen, "Größe", 8, 45, self.einst["breite_prozent"],
                                  bei_aenderung=lambda _: self._geaendert())
-        self.s_breite.pack(fill="x", pady=(0, 16))
+        self.s_breite.pack(fill="x", pady=(0, 12))
         self.s_rand = Schieber(innen, "Abstand zum Rand", 0, 10, self.einst["rand_prozent"],
                                nachkomma=1, bei_aenderung=lambda _: self._geaendert())
-        self.s_rand.pack(fill="x", pady=(0, 16))
+        self.s_rand.pack(fill="x", pady=(0, 12))
         self.s_deckkraft = Schieber(innen, "Deckkraft", 20, 100,
                                     self.einst["deckkraft_prozent"],
                                     bei_aenderung=lambda _: self._geaendert())
-        self.s_deckkraft.pack(fill="x", pady=(0, 22))
+        self.s_deckkraft.pack(fill="x", pady=(0, 16))
 
-        tk.Frame(innen, bg=FARBE["linie"], height=1).pack(fill="x", pady=(0, 18))
-        Knopf(innen, "Anderes Vorschaubild", self._vorschaubild_waehlen,
-              breite=250).pack(anchor="w", pady=(0, 8))
-        Knopf(innen, "Auf Standard zurücksetzen", self._zuruecksetzen,
-              breite=250).pack(anchor="w")
+        tk.Frame(innen, bg=FARBE["linie"], height=1).pack(fill="x", pady=(0, 14))
+        knoepfe = tk.Frame(innen, bg=FARBE["karte"])
+        knoepfe.pack(fill="x")
+        Knopf(knoepfe, "Anderes Bild", self._vorschaubild_waehlen,
+              breite=150).pack(side="left")
+        Knopf(knoepfe, "Zurücksetzen", self._zuruecksetzen,
+              breite=150).pack(side="left", padx=(10, 0))
 
-    def _fuss(self):
-        fuss = tk.Frame(self, bg=FARBE["grund"])
-        fuss.grid(row=2, column=0, sticky="ew", padx=28, pady=(18, 24))
+    def _fuss(self, eltern):
+        fuss = tk.Frame(eltern, bg=FARBE["grund"])
+        fuss.grid(row=2, column=0, sticky="ew", padx=28, pady=(14, 18))
         fuss.columnconfigure(0, weight=1)
 
         karte = Karte(fuss)
         karte.grid(row=0, column=0, sticky="ew")
         innen = tk.Frame(karte, bg=FARBE["karte"])
-        innen.pack(fill="x", padx=22, pady=18)
+        innen.pack(fill="x", padx=20, pady=14)
         innen.columnconfigure(1, weight=1)
 
         # Zeile 1 — Dateien
@@ -252,7 +366,7 @@ class Fenster(tk.Tk):
         self.lbl_input.grid(row=1, column=2, sticky="e")
 
         tk.Frame(innen, bg=FARBE["linie"], height=1).grid(
-            row=1, column=0, columnspan=3, sticky="ew", pady=18)
+            row=1, column=0, columnspan=3, sticky="ew", pady=14)
 
         # Zeile 2 — Start
         zeile2 = tk.Frame(innen, bg=FARBE["karte"])
@@ -276,12 +390,12 @@ class Fenster(tk.Tk):
               breite=150).pack(side="left", padx=(10, 0))
 
         # Protokoll
-        self.protokoll = tk.Text(innen, height=6, wrap="word", state="disabled",
+        self.protokoll = tk.Text(innen, height=4, wrap="word", state="disabled",
                                  bg=FARBE["feld"], fg=FARBE["text_leise"],
                                  font=mono(9), relief="flat", padx=14, pady=12,
                                  highlightthickness=1, highlightbackground=FARBE["linie"],
                                  insertbackground=FARBE["text"])
-        self.protokoll.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(18, 0))
+        self.protokoll.grid(row=3, column=0, columnspan=3, sticky="ew", pady=(14, 0))
         self.protokoll.tag_configure("hell", foreground=FARBE["text"])
         self.protokoll.tag_configure("fehler", foreground=FARBE["warnung"])
 
@@ -512,9 +626,16 @@ class Fenster(tk.Tk):
             befehl = [sys.executable]
         else:
             befehl = [sys.executable, os.path.join(w.PROG_DIR, "start.py")]
+        # Erst verschwinden, dann den Nachfolger starten: Sonst stehen für einige
+        # Sekunden zwei Fenster nebeneinander, bis dieses hier zu ist. Die Sperre
+        # wird vorher gelöst, damit der Nachfolger nicht auf sie warten muss.
+        self.withdraw()
+        _sperre_loesen()
         try:
             subprocess.Popen(befehl, close_fds=True)
         except OSError as e:
+            self.deiconify()
+            _sperre_holen(0)
             messagebox.showerror("Wasserzeichen",
                                  f"Neustart nicht möglich: {e}\n\n"
                                  "Bitte das Programm von Hand neu starten.")
@@ -617,10 +738,18 @@ def main(nach_start=None):
     verwirft daraufhin die vorherige Fassung: Ein Update gilt erst dann als
     gelungen, wenn wirklich ein Fenster zu sehen war.
     """
-    fenster = Fenster()
-    if nach_start:
-        fenster.after(2000, nach_start)
-    fenster.mainloop()
+    if not _sperre_holen():
+        # Es läuft schon eines. Kein zweites aufmachen, sondern das vorhandene
+        # zeigen — sonst arbeitet man in zwei Fenstern an denselben Dateien.
+        _vorhandenes_fenster_holen(w.beschriftung_laden()["fenstertitel"])
+        return
+    try:
+        fenster = Fenster()
+        if nach_start:
+            fenster.after(2000, nach_start)
+        fenster.mainloop()
+    finally:
+        _sperre_loesen()
 
 
 if __name__ == "__main__":

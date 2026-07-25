@@ -67,6 +67,62 @@ class Karte(tk.Frame):
                          highlightcolor=FARBE["linie"], **kw)
 
 
+class Buehne(tk.Frame):
+    """Trägt den Fensterinhalt und lässt ihn scrollen, sobald er nicht mehr passt.
+
+    Auf einem großen Bildschirm sieht man davon nichts: Der Inhalt bekommt die
+    volle Höhe und dehnt sich wie zuvor. Der Balken erscheint erst, wenn das
+    Fenster niedriger ist als der Inhalt braucht.
+
+    Nötig wurde das durch Windows-Rechner mit vergrößerter Darstellung: Steht die
+    Skalierung auf 175 %, hat ein Fenster über den ganzen Bildschirm nur noch gut
+    800 Bildpunkte Höhe zur Verfügung. Tk schneidet dann stillschweigend ab, was
+    unten nicht mehr hinpasst — auf diese Weise verschwanden Regler, ohne dass
+    irgendetwas darauf hingewiesen hätte.
+    """
+
+    def __init__(self, eltern):
+        super().__init__(eltern, bg=FARBE["grund"])
+        self.rowconfigure(0, weight=1)
+        self.columnconfigure(0, weight=1)
+        self._scrollt = False
+
+        self.sicht = tk.Canvas(self, bg=FARBE["grund"], highlightthickness=0)
+        self.sicht.grid(row=0, column=0, sticky="nsew")
+        self.balken = tk.Scrollbar(self, orient="vertical", command=self.sicht.yview)
+        self.sicht.configure(yscrollcommand=self.balken.set)
+
+        self.inhalt = tk.Frame(self.sicht, bg=FARBE["grund"])
+        self._fach = self.sicht.create_window(0, 0, window=self.inhalt, anchor="nw")
+
+        self.sicht.bind("<Configure>", self._passen)
+        self.inhalt.bind("<Configure>", self._passen)
+        self.bind_all("<MouseWheel>", self._rad)
+
+    def _passen(self, _=None):
+        breite = self.sicht.winfo_width()
+        hoehe = self.sicht.winfo_height()
+        noetig = self.inhalt.winfo_reqheight()
+        # Der Inhalt füllt mindestens das Sichtfeld, wird aber nie gestaucht.
+        self.sicht.itemconfigure(self._fach, width=breite, height=max(hoehe, noetig))
+        self.sicht.configure(scrollregion=(0, 0, breite, max(hoehe, noetig)))
+
+        scrollt = noetig > hoehe
+        if scrollt != self._scrollt:
+            self._scrollt = scrollt
+            if scrollt:
+                self.balken.grid(row=0, column=1, sticky="ns")
+            else:
+                self.balken.grid_remove()
+                self.sicht.yview_moveto(0)
+
+    def _rad(self, e):
+        # Das Protokoll scrollt selbst — dort gehört das Rad nicht der Bühne.
+        if not self._scrollt or isinstance(e.widget, tk.Text):
+            return
+        self.sicht.yview_scroll(-1 if e.delta > 0 else 1, "units")
+
+
 class Titel(tk.Label):
     """Kleine gesperrte Überschrift über einem Abschnitt."""
 
@@ -130,13 +186,56 @@ class Knopf(tk.Canvas):
         self._zeichne()
 
 
+class Pfeil(tk.Canvas):
+    """Winzige Taste mit ‹ oder › — regelt einen Schieber ohne Ziehen.
+
+    Für die Bedienung am Trackpad: Ein Regler lässt sich dort nur umständlich
+    genau treffen. Gedrückt halten wiederholt den Schritt.
+    """
+
+    def __init__(self, eltern, zeichen, befehl, kante=20):
+        super().__init__(eltern, width=kante, height=kante, bg=FARBE["karte"],
+                         highlightthickness=0, cursor="hand2")
+        self.befehl = befehl
+        self._zeichen = zeichen
+        self._job = None
+        self._zeichne()
+        self.bind("<Enter>", lambda _: self._zeichne(ueber=True))
+        self.bind("<Leave>", lambda _: (self._stopp(), self._zeichne()))
+        self.bind("<Button-1>", self._gedrueckt)
+        self.bind("<ButtonRelease-1>", lambda _: self._stopp())
+
+    def _zeichne(self, ueber=False):
+        self.delete("all")
+        b, h = int(self["width"]), int(self["height"])
+        self.create_text(b / 2, h / 2 - 1, text=self._zeichen, font=mono(12),
+                         fill=FARBE["text"] if ueber else FARBE["text_still"])
+
+    def _gedrueckt(self, _):
+        self.befehl()
+        self._job = self.after(420, self._weiter)
+
+    def _weiter(self):
+        self.befehl()
+        self._job = self.after(70, self._weiter)
+
+    def _stopp(self):
+        if self._job:
+            self.after_cancel(self._job)
+            self._job = None
+
+
 class Schieber(tk.Frame):
-    """Beschrifteter Regler: Titel und Wert oben, darunter die Bahn zum Ziehen."""
+    """Beschrifteter Regler: Titel und Wert oben, darunter die Bahn zum Ziehen.
+
+    Neben dem Wert stehen zwei Tasten für einzelne Schritte — am Trackpad ist
+    Ziehen auf den Punkt genau kaum möglich.
+    """
 
     BAHN_HOEHE = 26
 
     def __init__(self, eltern, beschriftung, von, bis, wert, einheit="%",
-                 nachkomma=0, bei_aenderung=None, breite=250):
+                 nachkomma=0, bei_aenderung=None, breite=250, schritt=None):
         super().__init__(eltern, bg=FARBE["karte"])
         self.von, self.bis = von, bis
         self.wert = wert
@@ -144,14 +243,19 @@ class Schieber(tk.Frame):
         self.einheit = einheit
         self.bei_aenderung = bei_aenderung
         self.breite = breite
+        # Ganze Prozent, bei feineren Reglern halbe Schritte.
+        self.schritt = schritt if schritt else (1 if nachkomma == 0 else 0.5)
 
         kopf = tk.Frame(self, bg=FARBE["karte"])
         kopf.pack(fill="x")
         tk.Label(kopf, text=gesperrt(beschriftung.upper()), font=mono(8),
                  fg=FARBE["text_still"], bg=FARBE["karte"]).pack(side="left")
+        # Von rechts nach links gepackt, damit die Reihenfolge ‹ Wert › ergibt.
+        Pfeil(kopf, "›", lambda: self._schritt_gehen(+1)).pack(side="right")
         self.wert_label = tk.Label(kopf, font=mono(10), fg=FARBE["text"],
-                                   bg=FARBE["karte"])
+                                   bg=FARBE["karte"], width=7, anchor="e")
         self.wert_label.pack(side="right")
+        Pfeil(kopf, "‹", lambda: self._schritt_gehen(-1)).pack(side="right")
 
         self.bahn = tk.Canvas(self, width=breite, height=self.BAHN_HOEHE,
                               bg=FARBE["karte"], highlightthickness=0, cursor="hand2")
@@ -160,6 +264,21 @@ class Schieber(tk.Frame):
         self.bahn.bind("<B1-Motion>", self._gezogen)
         self.bahn.bind("<Configure>", lambda e: self._zeichne(e.width))
         self._zeichne()
+
+    def _schritt_gehen(self, richtung):
+        """Einen Schritt weiter — und dabei auf glatte Werte einrasten.
+
+        Nach dem Ziehen steht dort etwa 24,4 %; ein Klick auf › soll daraus 25 %
+        machen und nicht 25,4 %.
+        """
+        neu = round((self.wert + richtung * self.schritt) / self.schritt) * self.schritt
+        neu = min(self.bis, max(self.von, round(neu, 3)))
+        if neu == self.wert:
+            return
+        self.wert = neu
+        self._zeichne()
+        if self.bei_aenderung:
+            self.bei_aenderung(self.wert)
 
     def _zeichne(self, breite=None):
         self.breite = breite or self.breite
@@ -197,7 +316,7 @@ class EckenWahl(tk.Frame):
 
     ORDNUNG = [("oben-links", 0, 0), ("oben-rechts", 0, 1),
                ("unten-links", 1, 0), ("unten-rechts", 1, 1)]
-    KACHEL_H = 56
+    KACHEL_H = 48
     ABSTAND = 8
 
     def __init__(self, eltern, wert, bei_aenderung=None):
