@@ -374,6 +374,45 @@ class EckenWahl(tk.Frame):
         self._waehlen(ecke)
 
 
+class Haken(tk.Frame):
+    """Beschriftetes Ankreuzfeld mit kleinem Hinweis darunter — selbstgezeichnet wie der Rest."""
+
+    def __init__(self, eltern, text, hinweis, wert, bei_aenderung=None):
+        super().__init__(eltern, bg=FARBE["karte"])
+        self.wert = bool(wert)
+        self.bei_aenderung = bei_aenderung
+        self.kaestchen = tk.Canvas(self, width=18, height=18, bg=FARBE["karte"],
+                                   highlightthickness=0, cursor="hand2")
+        self.kaestchen.grid(row=0, column=0, sticky="n", padx=(0, 10))
+        titel = tk.Label(self, text=text, font=mono(10), fg=FARBE["text"],
+                         bg=FARBE["karte"], anchor="w", justify="left",
+                         wraplength=250, cursor="hand2")
+        titel.grid(row=0, column=1, sticky="w")
+        tk.Label(self, text=hinweis, font=mono(9), fg=FARBE["text_still"],
+                 bg=FARBE["karte"], anchor="w", justify="left",
+                 wraplength=250).grid(row=1, column=1, sticky="w", pady=(2, 0))
+        for teil in (self.kaestchen, titel):
+            teil.bind("<Button-1>", lambda _: self._umschalten())
+        self._zeichne()
+
+    def _zeichne(self):
+        self.kaestchen.delete("all")
+        rundes_rechteck(self.kaestchen, 2, 2, 16, 16, 3,
+                        fill=FARBE["akzent"] if self.wert else FARBE["feld"],
+                        outline=FARBE["akzent"] if self.wert else FARBE["linie_hell"])
+        if self.wert:
+            self.kaestchen.create_line(5, 9, 8, 12, 13, 6, fill=FARBE["invers"], width=2)
+
+    def _umschalten(self):
+        self.setzen(not self.wert)
+        if self.bei_aenderung:
+            self.bei_aenderung(self.wert)
+
+    def setzen(self, wert):
+        self.wert = bool(wert)
+        self._zeichne()
+
+
 class Fortschritt(tk.Canvas):
     """Schlichter Balken — eine helle Linie auf dunkler Bahn."""
 

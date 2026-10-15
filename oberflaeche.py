@@ -10,7 +10,7 @@ Hier liegt nur der Ablauf: Dateien hinzufügen, Aussehen einstellen, verarbeiten
 Die Aufschriften im Kopf kommen aus beschriftung.json (siehe wasserzeichen.py);
 fehlt die Datei, zeigt das Fenster neutrale Standardtexte.
 """
-import os, queue, shutil, subprocess, sys, threading, time
+import ctypes, os, queue, shutil, subprocess, sys, threading, time
 import tkinter as tk
 from tkinter import filedialog, messagebox
 
@@ -20,8 +20,8 @@ import webbrowser
 
 import aktualisierung as akt
 import wasserzeichen as w
-from gestaltung import (FARBE, Buehne, EckenWahl, Fortschritt, Karte, Knopf, Schieber,
-                        Titel, gesperrt, mono)
+from gestaltung import (FARBE, Buehne, EckenWahl, Fortschritt, Haken, Karte, Knopf,
+                        Schieber, Titel, gesperrt, mono)
 
 # Mindestmaße der Vorschau. Bewusst klein gehalten: Die Leinwand wächst mit dem
 # Fenster, aber sie bestimmt, wie viel Höhe das Fenster überhaupt anfordert — und
@@ -536,7 +536,12 @@ class Fenster(tk.Tk):
         self.s_deckkraft = Schieber(innen, "Deckkraft", 20, 100,
                                     self.einst["deckkraft_prozent"],
                                     bei_aenderung=lambda _: self._geaendert())
-        self.s_deckkraft.pack(fill="x", pady=(0, 16))
+        self.s_deckkraft.pack(fill="x", pady=(0, 12))
+        self.h_full_hd = Haken(innen, "Videos auf Full HD verkleinern",
+                               "Reicht für Social Media und geht schneller. Betrifft nur Videos über Full HD.",
+                               self.einst["video_full_hd"],
+                               bei_aenderung=lambda _: self._geaendert())
+        self.h_full_hd.pack(fill="x", pady=(0, 16))
 
         tk.Frame(innen, bg=FARBE["linie"], height=1).pack(fill="x", pady=(0, 14))
         knoepfe = tk.Frame(innen, bg=FARBE["karte"])
@@ -618,6 +623,7 @@ class Fenster(tk.Tk):
             "rand_prozent": round(self.s_rand.wert, 1),
             "deckkraft_prozent": round(self.s_deckkraft.wert, 1),
             "jpeg_qualitaet": self.einst["jpeg_qualitaet"],
+            "video_full_hd": self.h_full_hd.wert,
         }
 
     def _geaendert(self):
@@ -632,6 +638,7 @@ class Fenster(tk.Tk):
         self.s_breite.setzen(self.standard["breite_prozent"])
         self.s_rand.setzen(self.standard["rand_prozent"])
         self.s_deckkraft.setzen(self.standard["deckkraft_prozent"])
+        self.h_full_hd.setzen(self.standard["video_full_hd"])
         self._geaendert()
 
     def _als_standard_setzen(self):
@@ -795,12 +802,25 @@ class Fenster(tk.Tk):
 
     def _arbeit(self, einst):
         """Läuft im Hintergrund — das Fenster bleibt bedienbar."""
+        # Windows soll mitten in einem langen Stapel nicht einschlafen. Der Zustand
+        # gilt je Thread, darum hier und nicht im Fenster-Thread.
+        if w.IST_WINDOWS:
+            try:
+                ctypes.windll.kernel32.SetThreadExecutionState(0x80000001)  # CONTINUOUS | SYSTEM_REQUIRED
+            except Exception:
+                pass
         try:
             fertig, fehler, lauf = w.alles_verarbeiten(
                 einst, melden=self.meldungen.put, abbruch=lambda: self.abbruch_gewuenscht)
             self.meldungen.put(("ENDE", fertig, fehler, lauf))
         except Exception as e:
             self.meldungen.put(("ENDE", 0, [("", w._klartext(e))], None))
+        finally:
+            if w.IST_WINDOWS:
+                try:
+                    ctypes.windll.kernel32.SetThreadExecutionState(0x80000000)  # CONTINUOUS
+                except Exception:
+                    pass
 
     # -------------------------------------------------------------- Aktualisieren
 

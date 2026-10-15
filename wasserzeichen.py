@@ -17,7 +17,7 @@ Originale wandern nach  input/erledigt/  — nichts wird gelöscht.
 Läuft unter macOS und Windows aus derselben Datei: unter Windows werden
 ffmpeg.exe/ffprobe.exe aus dem Tool-Ordner genutzt und RAW über rawpy gelesen.
 """
-import json, os, re, shutil, subprocess, sys, tempfile
+import json, os, re, shutil, subprocess, sys, tempfile, time
 from datetime import datetime
 from PIL import Image, ImageDraw, ImageOps
 
@@ -89,6 +89,7 @@ STANDARD = {
     "rand_prozent": 2.5,        # Abstand zur Ecke relativ zur Bildbreite
     "deckkraft_prozent": 95.0,  # 100 = voll deckend
     "jpeg_qualitaet": 92,
+    "video_full_hd": True,      # Videos über Full HD auf Full HD verkleinern — reicht für Social Media, geht schneller
 }
 
 # Aufschriften im Fenster. Wer das Tool nutzt, steht in beschriftung.json neben
@@ -141,6 +142,9 @@ def _werte_lesen(pfad, vorgabe):
         wert = gespeichert.get(schluessel, standard)
         if schluessel == "ecke":
             werte[schluessel] = wert if wert in ECKEN else standard
+        elif isinstance(standard, bool):
+            # bool("false") wäre True — nur echte Ja/Nein-Werte übernehmen.
+            werte[schluessel] = wert if isinstance(wert, bool) else standard
         else:
             try:
                 werte[schluessel] = type(standard)(wert)
@@ -270,11 +274,35 @@ def _raw_oeffnen(pfad):
     return img
 
 
-def _video_encoder():
-    """Mac: Hardware-Encoder. Windows: libx264 (läuft überall, keine Treiberabhängigkeit)."""
-    if IST_WINDOWS:
-        return ["-c:v", "libx264", "-preset", "medium", "-pix_fmt", "yuv420p"]
-    return ["-c:v", "h264_videotoolbox"]
+FULL_HD = 1920  # lange Seite bei „Videos auf Full HD verkleinern“
+
+# Name des ersten Encoders, der auf diesem Rechner durchlief. Spätere Videos
+# probieren nur noch diesen (danach libx264) statt die ganze Kette neu.
+_encoder_gemerkt = None
+
+
+def _video_encoder(ziel_bps):
+    """Kandidaten für die Video-Kodierung, bester zuerst: (Name, Eingabe-Optionen, Encoder-Optionen).
+
+    Mac: Hardware-Encoder. Windows: erst die Grafikkarten-Encoder (NVIDIA, Intel,
+    AMD), zuletzt libx264 — das läuft überall und steht deshalb immer am Ende.
+    Welcher Hardware-Encoder auf dem Rechner wirklich geht, zeigt erst ein echter
+    Lauf; video_stempeln probiert die Liste deshalb der Reihe nach durch.
+    """
+    if not IST_WINDOWS:
+        return [("h264_videotoolbox", [], ["-c:v", "h264_videotoolbox", "-b:v", str(ziel_bps)])]
+    bitrate = ["-b:v", str(ziel_bps), "-maxrate", str(int(ziel_bps * 1.5)),
+               "-bufsize", str(ziel_bps * 2)]
+    hw = ["-hwaccel", "d3d11va"]
+    return [
+        ("h264_nvenc", hw, ["-c:v", "h264_nvenc", "-preset", "p4", "-rc", "vbr",
+                            "-pix_fmt", "yuv420p", *bitrate]),
+        ("h264_qsv", hw, ["-c:v", "h264_qsv", "-preset", "medium", *bitrate]),
+        ("h264_amf", hw, ["-c:v", "h264_amf", "-quality", "balanced", "-rc", "vbr_peak",
+                          *bitrate]),
+        ("libx264", [], ["-c:v", "libx264", "-preset", "veryfast", "-pix_fmt", "yuv420p",
+                         "-b:v", str(ziel_bps)]),
+    ]
 
 
 # ---------------------------------------------------------------- Logo
@@ -383,7 +411,11 @@ def _ohne_fenster():
 
 
 def _video_angaben(pfad):
-    """Breite, Bitrate und Länge des Videos. Länge ist für den Fortschritt nötig.
+    """Breite, Höhe, Bitrate und Länge des Videos. Länge ist für den Fortschritt nötig.
+
+    Breite und Höhe sind die angezeigte Orientierung: Handyvideos speichern quer
+    und tragen nur eine Drehmarkierung — ffmpeg dreht beim Kodieren, also zählt
+    das gedrehte Maß.
 
     Bewusst über JSON und nicht zeilenweise: AVCHD-Dateien von Sony (.mts/.m2ts)
     melden ihren Videostream doppelt, wodurch sich eine nach Position gelesene
@@ -392,7 +424,8 @@ def _video_angaben(pfad):
     probe = subprocess.run(
         [_werkzeug("ffprobe"), "-v", "quiet", "-print_format", "json",
          "-select_streams", "v:0", "-show_entries",
-         "stream=width,bit_rate:format=duration,bit_rate", pfad],
+         "stream=width,height,bit_rate:stream_side_data=rotation:stream_tags=rotate"
+         ":format=duration,bit_rate", pfad],
         capture_output=True, text=True, **_ohne_fenster())
     try:
         daten = json.loads(probe.stdout or "{}")
@@ -411,13 +444,46 @@ def _video_angaben(pfad):
             return ersatz
 
     breite = int(zahl(strom.get("width"), 1920))
+    hoehe = int(zahl(strom.get("height"), 1080))
+    drehungen = [(s_d or {}).get("rotation") for s_d in strom.get("side_data_list") or []]
+    drehungen.append((strom.get("tags") or {}).get("rotate"))
+    for roh in drehungen:
+        try:
+            if round(abs(float(roh))) % 180 == 90:
+                breite, hoehe = hoehe, breite
+                break
+        except (TypeError, ValueError):
+            pass
     # AVCHD gibt je Stream keine Bitrate an; dann die des ganzen Containers nehmen,
     # sonst würde ein 24-Mbit-Video auf den Ersatzwert heruntergerechnet.
     bitrate = int(zahl(strom.get("bit_rate"))
                   or zahl(format_teil.get("bit_rate"))
                   or 8_000_000)
     dauer = zahl(format_teil.get("duration"))   # 0 = unbekannt, dann ohne Prozente
-    return breite, bitrate, dauer
+    return breite, hoehe, bitrate, dauer
+
+
+def _video_ausgabe(breite, hoehe, full_hd):
+    """Ausgabemaß und, falls verkleinert wird, der scale-Filter dafür."""
+    if full_hd and max(breite, hoehe) > FULL_HD:
+        if breite >= hoehe:
+            return FULL_HD, round(hoehe * FULL_HD / breite / 2) * 2, f"scale={FULL_HD}:-2"
+        return round(breite * FULL_HD / hoehe / 2) * 2, FULL_HD, f"scale=-2:{FULL_HD}"
+    return breite, hoehe, None
+
+
+def _video_befehl(ffmpeg, pfad, wz_tmp, ziel, fortschritt_datei, kandidat, ausgabe_breite,
+                  verkleinern, einst):
+    """ffmpeg-Aufruf für einen Encoder-Kandidaten — ohne etwas zu starten."""
+    _, vor_eingabe, encoder = kandidat
+    ueberlagerung = f"overlay={_ecken_ausdruck(ausgabe_breite, einst)}"
+    graph = (f"[0:v]{verkleinern}[v];[v][1:v]{ueberlagerung}" if verkleinern
+             else f"[0:v][1:v]{ueberlagerung}")
+    return [ffmpeg, "-y", "-hide_banner", "-loglevel", "warning",
+            "-progress", fortschritt_datei, "-nostdin",
+            *vor_eingabe, "-i", pfad, "-i", wz_tmp,
+            "-filter_complex", graph, *encoder,
+            "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", ziel]
 
 
 def _fortschritt_lesen(pfad, dauer):
@@ -439,6 +505,44 @@ def _fortschritt_lesen(pfad, dauer):
     return None
 
 
+def _ffmpeg_laufen(cmd, meldungen_datei, fortschritt_datei, dauer, melden, abbruch):
+    """ffmpeg starten und abwarten; liefert den Rückgabecode."""
+    zuletzt_gemeldet = -1
+    # Ausgabe in eine Datei statt in eine Röhre: Eine volle Röhre, die
+    # niemand leert, würde ffmpeg mitten im Lauf blockieren.
+    with open(meldungen_datei, "w", encoding="utf-8") as ausgabe:
+        prozess = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
+                                   stdout=ausgabe, stderr=ausgabe,
+                                   **_ohne_fenster())
+        while True:
+            try:
+                prozess.wait(timeout=0.5)
+                break
+            except subprocess.TimeoutExpired:
+                pass
+            if abbruch and abbruch():
+                prozess.terminate()
+                try:
+                    prozess.wait(timeout=5)
+                except subprocess.TimeoutExpired:
+                    prozess.kill()
+                raise Abgebrochen()
+            if melden:
+                stand = _fortschritt_lesen(fortschritt_datei, dauer)
+                if stand is not None and stand >= zuletzt_gemeldet + 5:
+                    zuletzt_gemeldet = stand
+                    melden(f"    ... {stand} %")
+    return prozess.returncode
+
+
+def _meldungen_zeilen(meldungen_datei):
+    try:
+        with open(meldungen_datei, encoding="utf-8", errors="ignore") as f:
+            return [z.strip() for z in f.readlines() if z.strip()]
+    except OSError:
+        return []
+
+
 def video_stempeln(pfad, einst=None, lauf=None, melden=None, abbruch=None):
     """Ein Video stempeln.
 
@@ -447,11 +551,18 @@ def video_stempeln(pfad, einst=None, lauf=None, melden=None, abbruch=None):
     abbruch: wird währenddessen abgefragt; ffmpeg wird dann wirklich beendet
     und nicht erst nach der Datei.
     """
+    global _encoder_gemerkt
     einst = einst or einstellungen_laden()
     ordner = _zielordner(lauf, "videos")
-    breite, original_bps, dauer = _video_angaben(pfad)
-    deckel = 40_000_000 if breite >= 3000 else 14_000_000  # 4K braucht mehr Luft
+    breite, hoehe, original_bps, dauer = _video_angaben(pfad)
+    ausgabe_b, ausgabe_h, verkleinern = _video_ausgabe(
+        breite, hoehe, einst.get("video_full_hd", False))
+    deckel = 40_000_000 if ausgabe_b >= 3000 else 14_000_000  # 4K braucht mehr Luft
     ziel_bps = min(deckel, max(2_000_000, int(original_bps * 1.5)))
+
+    kandidaten = _video_encoder(ziel_bps)
+    if _encoder_gemerkt:  # schon einmal durchprobiert: nur den, der ging, und die Reserve
+        kandidaten = [k for k in kandidaten if k[0] in (_encoder_gemerkt, "libx264")] or kandidaten
 
     # Hilfsdateien in einen echten Zwischenablage-Ordner: im Ablageordner des
     # Benutzers haben sie nichts zu suchen, und ein führender Punkt versteckt
@@ -460,54 +571,48 @@ def video_stempeln(pfad, einst=None, lauf=None, melden=None, abbruch=None):
     wz_tmp = os.path.join(arbeitsordner, "logo.png")
     fortschritt_datei = os.path.join(arbeitsordner, "fortschritt.txt")
     meldungen_datei = os.path.join(arbeitsordner, "meldungen.txt")
-    _logo_skaliert(breite, einst).save(wz_tmp)
-
     ziel = os.path.join(ordner, os.path.splitext(os.path.basename(pfad))[0] + "_wz.mp4")
-    cmd = [_werkzeug("ffmpeg"), "-y", "-hide_banner", "-loglevel", "warning",
-           "-progress", fortschritt_datei, "-nostdin",
-           "-i", pfad, "-i", wz_tmp,
-           "-filter_complex", f"[0:v][1:v]overlay={_ecken_ausdruck(breite, einst)}",
-           *_video_encoder(), "-b:v", str(ziel_bps),
-           "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", ziel]
 
-    zuletzt_gemeldet = -1
     try:
-        # Ausgabe in eine Datei statt in eine Röhre: Eine volle Röhre, die
-        # niemand leert, würde ffmpeg mitten im Lauf blockieren.
-        with open(meldungen_datei, "w", encoding="utf-8") as ausgabe:
-            prozess = subprocess.Popen(cmd, stdin=subprocess.DEVNULL,
-                                       stdout=ausgabe, stderr=ausgabe,
-                                       **_ohne_fenster())
-            while True:
+        _logo_skaliert(ausgabe_b, einst).save(wz_tmp)
+        for nr, kandidat in enumerate(kandidaten):
+            letzter = nr == len(kandidaten) - 1
+            cmd = _video_befehl(_werkzeug("ffmpeg"), pfad, wz_tmp, ziel, fortschritt_datei,
+                                kandidat, ausgabe_b, verkleinern, einst)
+            if os.path.exists(fortschritt_datei):
+                os.remove(fortschritt_datei)
+            start = time.monotonic()
+            if _ffmpeg_laufen(cmd, meldungen_datei, fortschritt_datei, dauer,
+                              melden, abbruch) == 0:
+                rechenzeit = time.monotonic() - start
+                _encoder_gemerkt = kandidat[0]
+                break
+            # Abbruch kann genau dann kommen, wenn ein Versuch gerade scheitert —
+            # dann nicht noch den nächsten Encoder starten.
+            if abbruch and abbruch():
+                raise Abgebrochen()
+            zeilen = _meldungen_zeilen(meldungen_datei)
+            if os.path.exists(ziel):  # angefangene Datei wäre unbrauchbar
                 try:
-                    prozess.wait(timeout=0.5)
-                    break
-                except subprocess.TimeoutExpired:
+                    os.remove(ziel)
+                except OSError:
                     pass
-                if abbruch and abbruch():
-                    prozess.terminate()
-                    try:
-                        prozess.wait(timeout=5)
-                    except subprocess.TimeoutExpired:
-                        prozess.kill()
-                    raise Abgebrochen()
-                if melden:
-                    stand = _fortschritt_lesen(fortschritt_datei, dauer)
-                    if stand is not None and stand >= zuletzt_gemeldet + 5:
-                        zuletzt_gemeldet = stand
-                        melden(f"    ... {stand} %")
-
-        if prozess.returncode != 0:
-            grund = ""
-            try:
-                with open(meldungen_datei, encoding="utf-8", errors="ignore") as f:
-                    zeilen = [z.strip() for z in f.readlines() if z.strip()]
+            if letzter:
                 grund = " ".join(zeilen[-3:])[:300]
-            except OSError:
-                pass
-            raise WerkstattFehler(
-                f"Das Video ließ sich nicht verarbeiten: {os.path.basename(pfad)}"
-                + (f"\n{grund}" if grund else ""))
+                raise WerkstattFehler(
+                    f"Das Video ließ sich nicht verarbeiten: {os.path.basename(pfad)}"
+                    + (f"\n{grund}" if grund else ""))
+            if melden:
+                melden(f"    {kandidat[0]} ging nicht ({(zeilen[0] if zeilen else 'ohne Meldung')[:120]})"
+                       f" -> {kandidaten[nr + 1][0]}")
+
+        if melden:
+            masse = (f"{breite}×{hoehe} → {ausgabe_b}×{ausgabe_h}" if verkleinern
+                     else f"{breite}×{hoehe}")
+            zeile = f"    Encoder {kandidat[0]} · {masse}"
+            if dauer > 0 and rechenzeit > 0:
+                zeile += f" · {dauer / rechenzeit:.1f}".replace(".", ",") + "× Echtzeit"
+            melden(zeile)
         return ziel
 
     except Abgebrochen:
